@@ -75,6 +75,9 @@ def test_model(x0, model, input_augmentation=None, **kwargs):
             kwargs['patch_range']['start_dim1']:kwargs['patch_range']['end_dim1'],
             kwargs['patch_range']['start_dim2']:kwargs['patch_range']['end_dim2']] for x in x0]
 
+        assert list(patch[0].squeeze().numpy().shape) == kwargs['assemble_params']['dx_shape']
+        #print((patch[0].squeeze().numpy().shape, kwargs['assemble_params']['dx_shape']))
+
         patch = torch.cat([upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
         out_aug = []
@@ -118,45 +121,81 @@ def reverse_log(x):
     return np.power(10, x)
 
 
-def assemble_microscopy_volumne(kwargs, w, zrange, xrange, yrange, source):
+def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
     C = kwargs['assemble_params']['C']
     S = kwargs['assemble_params']['S']
-    for ix in tqdm(xrange):
+
+    one_stack = []
+    for nx in tqdm(range(len(xrange))):
         one_column = []
-        for iz in zrange:
+        for nz in range(len(zrange)):
             one_row = []
-            for iy in yrange:
+            for ny in range(len(yrange)):
+                # get weight
+                if nx == len(xrange) - 1:
+                    nx = -1
+                if ny == len(yrange) - 1:
+                    ny = -1
+                if nz == len(zrange) - 1:
+                    nz = -1
+
+                iz = zrange[nz]
+                ix = xrange[nx]
+                iy = yrange[ny]
+
+                w = create_tapered_weight(nz, nx, ny, size=kwargs['assemble_params']['weight_shape'], edge_size=64)
+
+                # load and crop
                 x = tiff.imread(source + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif')
-                cropped = x[C:-C, :, C:-C]
+                cropped = x[C:-C, C:-C, C:-C]
                 cropped = np.multiply(cropped, w)
                 if len(one_row) > 0:
                     one_row[-1][:, :, -S:] = one_row[-1][:, :, -S:] + cropped[:, :, :S]
                     one_row.append(cropped[:, :, S:])
                 else:
                     one_row.append(cropped)
-            one_row = np.concatenate(one_row, axis=2)
-            one_row = np.transpose(one_row, (1, 0, 2))
+
+            one_row = np.concatenate(one_row, axis=2)  # (Z, X, Y)
+            one_row = np.transpose(one_row, (1, 0, 2))  # (X, Z, Y)
 
             if len(one_column) > 0:
                 one_column[-1][:, -S:, :] = one_column[-1][:, -S:, :] + one_row[:, :S, :]
                 one_column.append(one_row[:, S:, :])
             else:
                 one_column.append(one_row)
+
         one_column = np.concatenate(one_column, axis=1).astype(np.float32)
-    tiff.imwrite(source[:-1] + '.tif', one_column)
+
+        #tiff.imwrite('o.tif', one_column)
+
+        if len(one_stack) > 0:
+            one_stack[-1][-S:, :, :] = one_stack[-1][-S:, :, :] + one_column[:S, :, :]
+            one_stack.append(one_column[S:, :, :])
+        else:
+            one_stack.append(one_column)
+
+    one_stack = np.concatenate(one_stack, axis=0).astype(np.float32)
+
+    tiff.imwrite(source[:-1] + '.tif', one_stack)
 
 
 def test_over_volumne(kwargs, dx, dy, dz, zrange, xrange, yrange, destination, input_augmentation):
-    for ix in xrange:
-        for iz in tqdm(zrange):
+    for ix in tqdm(xrange):
+        for iz in zrange:
             for iy in yrange:
+                print((iz, ix, iy))
                 kwargs['patch_range'] = {'start_dim0': iz, 'end_dim0': iz + dz,
                                          'start_dim1': ix, 'end_dim1': ix + dx,
                                          'start_dim2': iy, 'end_dim2': iy + dy}
 
                 out_all, patch = test_model(x0, model, input_augmentation=input_augmentation, **kwargs)
+                out = out_all.mean(axis=3).astype(np.float32)
 
-                tiff.imwrite(destination + 'xy/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out_all.mean(axis=3).astype(np.float32))
+                if args.reverselog:
+                    out = reverse_log(out)
+                    patch = reverse_log(patch)
+
+                tiff.imwrite(destination + 'xy/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out)
                 tiff.imwrite(destination + 'ori/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', patch)
 
                 if mc > 1:
@@ -231,16 +270,42 @@ def slice_for_ganout():
                 tiff.imwrite(roi.replace('/xy/', '/ganori/')[:-4] + '_' + str(ix).zfill(3) + '.tif', ori[:, ix, :])
 
 
-def get_weight(size, method='cross', S=32):
-    # the linearly tapering weight to combine al the individual ROI
+def create_tapered_weight(nz, nx, ny, size, edge_size: int = 64) -> np.ndarray:
+    """
+    Create a 3D cube with linearly tapered edges in all directions.
+
+    Args:
+        size (int): Size of the cube (size x size x size)
+        edge_size (int): Size of the tapered edge section
+
+    Returns:
+        np.ndarray: 3D array with tapered weights
+    """
+    # Create base cube filled with ones
     weight = np.ones(size)
-    weight[:, :, :S] = np.linspace(0, 1, S)
-    weight[:, :, -S:] = np.linspace(1, 0, S)
-    if method == 'row':
-        return weight
-    if method == 'cross':
-        weight = np.multiply(np.transpose(weight, (2, 1, 0)), weight)
-        return weight
+
+    # Create linear taper from 0 to 1
+    taper = np.linspace(0, 1, edge_size)
+
+    # Z
+    if nz != 0:
+        weight[:edge_size, :, :] *= taper.reshape(-1, 1, 1)
+    if nz != -1:
+        weight[-edge_size:, :, :] *= taper[::-1].reshape(-1, 1, 1)
+
+    # X
+    if nx != 0:
+        weight[:, :edge_size, :] *= taper.reshape(1, -1, 1)
+    if nx != -1:
+        weight[:, -edge_size:, :] *= taper[::-1].reshape(1, -1, 1)
+
+    # Y
+    if ny != 0:
+        weight[:, :, :edge_size] *= taper
+    if ny != -1:
+        weight[:, :, -edge_size:] *= taper[::-1]
+
+    return weight
 
 
 def get_args(option, config_name):
@@ -325,6 +390,7 @@ def test_args():
     parser.add_argument('--mode', type=str, default='dummy')
     parser.add_argument('--port', type=str, default='dummy')
     parser.add_argument('--host', type=str, default='dummy')
+    parser.add_argument('--reverselog', action='store_true', default=False)
     return parser
 
 
@@ -353,17 +419,20 @@ if __name__ == '__main__':
                         kwargs['exp_trd'][i], kwargs['exp_ftr'][i], kwargs['trd'][i])
 
     # single test
-    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][:], **kwargs)
+    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][2:], **kwargs)
     out = out.mean(axis=3)
 
     # save single output
+    if args.reverselog:
+        out = reverse_log(out)
+        pstch = reverse_log(patch)
+
     tiff.imwrite(destination + '/xy.tif', np.transpose(out, (1, 0, 2)))
     tiff.imwrite(destination + '/patch.tif', np.transpose(patch, (1, 0, 2)))
 
     # assembly test
     if args.assemble:
         dz, dx, dy = kwargs['assemble_params']['dx_shape']
-        w = get_weight(kwargs['assemble_params']['weight_shape'], method='cross', S=kwargs['assemble_params']['S'])
         zrange = range(*kwargs['assemble_params']['zrange'])
         xrange = range(*kwargs['assemble_params']['xrange'])
         yrange = range(*kwargs['assemble_params']['yrange'])
@@ -372,20 +441,19 @@ if __name__ == '__main__':
         test_over_volumne(kwargs, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
                           destination=destination + '/cycout/', input_augmentation=[None, 'transpose', 'flip2', 'flip3'][:])
 
-        assemble_microscopy_volumne(kwargs, w, zrange=zrange, xrange=xrange, yrange=yrange,
+        assemble_microscopy_volumne(kwargs, zrange=zrange, xrange=xrange, yrange=yrange,
                                     source=destination + '/cycout/xy/')
 
-        assemble_microscopy_volumne(kwargs, w, zrange=zrange, xrange=xrange, yrange=yrange,
+        assemble_microscopy_volumne(kwargs, zrange=zrange, xrange=xrange, yrange=yrange,
                                     source=destination + '/cycout/ori/')
 
 
     # USAGE
     # DPM4X:
     # python test_combine.py  --prj /ae/iso0_ldmaex2_lb10_tc/ --epoch 2300 --model_type AE --option DPM4X --gpu --assemble
+    # python test_combine.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --option DPM4X --gpu --hbranchz --assemble
     # Fly0B:
     #   GAN:
     #   python test_combine.py  --prj /IsoScopeXXcut/ngf32lb10/ --epoch 5000 --model_type GAN --option Fly0B --gpu
     #   AE: (This on has "--hbranchz")
-    #   python test_combine.py  --prj /ae/cut/1/ --epoch 3000 --model_type AE --option Fly0B --gpu --hbrahcnz
-
-
+    #   python test_combine.py  --prj /ae/cut/1/ --epoch 3000 --model_type AE --option Fly0B --gpu --hbranchz
