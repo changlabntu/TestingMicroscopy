@@ -17,6 +17,7 @@ from tqdm import tqdm
 from utils.model_utils import read_json_to_args, import_model, load_pth
 import argparse
 
+
 def get_gan_out(x0, model):
     #x0 = [x.unsqueeze(0).unsqueeze(0).float().permute(0, 1, 3, 4, 2) for x in x0]
     #x0 = torch.cat(x0, dim=1).cuda()  # concatenate all the input channels
