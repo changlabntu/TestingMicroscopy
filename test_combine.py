@@ -16,6 +16,7 @@ import yaml
 from tqdm import tqdm
 from utils.model_utils import read_json_to_args, import_model, load_pth
 import argparse
+import ipdb
 
 
 def get_gan_out(x0, model):
@@ -76,8 +77,9 @@ def test_model(x0, model, input_augmentation=None, **kwargs):
             kwargs['patch_range']['start_dim1']:kwargs['patch_range']['end_dim1'],
             kwargs['patch_range']['start_dim2']:kwargs['patch_range']['end_dim2']] for x in x0]
 
+        # ipdb.set_trace()
         assert list(patch[0].squeeze().numpy().shape) == kwargs['assemble_params']['dx_shape']
-        #print((patch[0].squeeze().numpy().shape, kwargs['assemble_params']['dx_shape']))
+        # print((patch[0].squeeze().numpy().shape, kwargs['assemble_params']['dx_shape']))
 
         patch = torch.cat([upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
@@ -123,8 +125,10 @@ def reverse_log(x):
 
 
 def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
-    C = kwargs['assemble_params']['C']
-    S = kwargs['assemble_params']['S']
+    C0, C1, C2 = kwargs['assemble_params']['C']
+    S0, S1, S2 = kwargs['assemble_params']['S']
+    # C = kwargs['assemble_params']['C']
+    # S = kwargs['assemble_params']['S']
 
     one_stack = []
     for nx in tqdm(range(len(xrange))):
@@ -144,15 +148,16 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
                 ix = xrange[nx]
                 iy = yrange[ny]
 
-                w = create_tapered_weight(nz, nx, ny, size=kwargs['assemble_params']['weight_shape'], edge_size=64)
+                w = create_tapered_weight(S0, S1, S2, nz, nx, ny, size=kwargs['assemble_params']['weight_shape'], edge_size=64)
 
                 # load and crop
                 x = tiff.imread(source + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif')
-                cropped = x[C:-C, C:-C, C:-C]
+                cropped = x[C0:-C0, C1:-C1, C2:-C2]
+                # ipdb.set_trace()
                 cropped = np.multiply(cropped, w)
                 if len(one_row) > 0:
-                    one_row[-1][:, :, -S:] = one_row[-1][:, :, -S:] + cropped[:, :, :S]
-                    one_row.append(cropped[:, :, S:])
+                    one_row[-1][:, :, -S2:] = one_row[-1][:, :, -S2:] + cropped[:, :, :S2]
+                    one_row.append(cropped[:, :, S2:])
                 else:
                     one_row.append(cropped)
 
@@ -160,18 +165,19 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
             one_row = np.transpose(one_row, (1, 0, 2))  # (X, Z, Y)
 
             if len(one_column) > 0:
-                one_column[-1][:, -S:, :] = one_column[-1][:, -S:, :] + one_row[:, :S, :]
-                one_column.append(one_row[:, S:, :])
+                one_column[-1][:, -S0:, :] = one_column[-1][:, -S0:, :] + one_row[:, :S0, :]
+                one_column.append(one_row[:, S0:, :])
             else:
                 one_column.append(one_row)
 
         one_column = np.concatenate(one_column, axis=1).astype(np.float32)
 
-        #tiff.imwrite('o.tif', one_column)
+        # ipdb.set_trace()
+        tiff.imwrite('o.tif', one_column)
 
         if len(one_stack) > 0:
-            one_stack[-1][-S:, :, :] = one_stack[-1][-S:, :, :] + one_column[:S, :, :]
-            one_stack.append(one_column[S:, :, :])
+            one_stack[-1][-S1:, :, :] = one_stack[-1][-S1:, :, :] + one_column[:S1, :, :]
+            one_stack.append(one_column[S1:, :, :])
         else:
             one_stack.append(one_column)
 
@@ -271,7 +277,7 @@ def slice_for_ganout():
                 tiff.imwrite(roi.replace('/xy/', '/ganori/')[:-4] + '_' + str(ix).zfill(3) + '.tif', ori[:, ix, :])
 
 
-def create_tapered_weight(nz, nx, ny, size, edge_size: int = 64) -> np.ndarray:
+def create_tapered_weight(S0, S1, S2, nz, nx, ny, size, edge_size: int = 64) -> np.ndarray:
     """
     Create a 3D cube with linearly tapered edges in all directions.
 
@@ -286,25 +292,28 @@ def create_tapered_weight(nz, nx, ny, size, edge_size: int = 64) -> np.ndarray:
     weight = np.ones(size)
 
     # Create linear taper from 0 to 1
-    taper = np.linspace(0, 1, edge_size)
+    # taper = np.linspace(0, 1, edge_size)
+    taper_S0 = np.linspace(0, 1, S0)
+    taper_S1 = np.linspace(0, 1, S1)
+    taper_S2 = np.linspace(0, 1, S2)
 
     # Z
     if nz != 0:
-        weight[:edge_size, :, :] *= taper.reshape(-1, 1, 1)
+        weight[:S0, :, :] *= taper_S0.reshape(-1, 1, 1)
     if nz != -1:
-        weight[-edge_size:, :, :] *= taper[::-1].reshape(-1, 1, 1)
+        weight[-S0:, :, :] *= taper_S0[::-1].reshape(-1, 1, 1)
 
     # X
     if nx != 0:
-        weight[:, :edge_size, :] *= taper.reshape(1, -1, 1)
+        weight[:, :S1, :] *= taper_S1.reshape(1, -1, 1)
     if nx != -1:
-        weight[:, -edge_size:, :] *= taper[::-1].reshape(1, -1, 1)
+        weight[:, -S1:, :] *= taper_S1[::-1].reshape(1, -1, 1)
 
     # Y
     if ny != 0:
-        weight[:, :, :edge_size] *= taper
+        weight[:, :, :S2] *= taper_S2
     if ny != -1:
-        weight[:, :, -edge_size:] *= taper[::-1]
+        weight[:, :, -S2:] *= taper_S2[::-1]
 
     return weight
 
