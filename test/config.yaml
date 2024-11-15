@@ -1,4 +1,4 @@
-SOURCE: '/home/aero/charliechang/projects/TestingMicroscopy'
+SOURCE: '/media/ExtHDD01/'
 DPM4X:
   dataset: "DPM4X"
   upsample_params: # upsample size (60, 128, 384) > (384, 128, 384)

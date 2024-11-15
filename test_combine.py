@@ -78,7 +78,7 @@ def test_model(x0, model, input_augmentation=None, **kwargs):
             kwargs['patch_range']['start_dim2']:kwargs['patch_range']['end_dim2']] for x in x0]
 
         # ipdb.set_trace()
-        assert list(patch[0].squeeze().numpy().shape) == kwargs['assemble_params']['dx_shape']
+        #assert list(patch[0].squeeze().numpy().shape) == kwargs['assemble_params']['dx_shape']
         # print((patch[0].squeeze().numpy().shape, kwargs['assemble_params']['dx_shape']))
 
         patch = torch.cat([upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
@@ -359,6 +359,7 @@ def norm_x0(x0, norm_method, exp_trd, exp_ftr, trd):
         x0 = x0 / exp_ftr
         x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
     elif norm_method == '11':
+        x0[x0 <= trd[0]] = trd[0]
         x0[x0 >= trd[1]] = trd[1]
         #x0 = x0 / x0.max()
         x0 = (x0 - x0.min()) / (x0.max() - x0.min())
@@ -409,7 +410,7 @@ if __name__ == '__main__':
     parser = test_args()
     args = parser.parse_args()
     # Data parameters
-    config, kwargs = get_args(option=args.option, config_name='test/config.yaml')
+    config, kwargs = get_args(option=args.option, config_name='test/config_ghc.yaml')
     print(kwargs)
 
     model_type = args.model_type
@@ -425,8 +426,11 @@ if __name__ == '__main__':
     # Data
     x0 = get_data(kwargs)
     for i in range(len(x0)):
+        print(i)
+        print((x0[i].min(), x0[i].max()))
         x0[i] = norm_x0(x0[i], kwargs['norm_method'][i],
                         kwargs['exp_trd'][i], kwargs['exp_ftr'][i], kwargs['trd'][i])
+        print((x0[i].min(), x0[i].max()))
 
     # single test
     out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][2:], **kwargs)
@@ -435,7 +439,7 @@ if __name__ == '__main__':
     # save single output
     if args.reverselog:
         out = reverse_log(out)
-        pstch = reverse_log(patch)
+        patch = reverse_log(patch)
 
     tiff.imwrite(destination + '/xy.tif', np.transpose(out, (1, 0, 2)))
     tiff.imwrite(destination + '/patch.tif', np.transpose(patch, (1, 0, 2)))
