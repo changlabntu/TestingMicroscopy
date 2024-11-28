@@ -2,49 +2,41 @@ SOURCE: '/media/ExtHDD01/'
 DPM4X:
   dataset: "DPM4X"
   upsample_params: # upsample size (60, 128, 384) > (384, 128, 384)
-    size: [32, 256, 256]
+    size: [256, 256, 256]
   patch_range: # range of original ROI before interpolate
-    #start_dim0: 189 # (60, 128, 384)
-    #end_dim0: 221
-    #start_dim1: 120
-    #end_dim1: 376
-    #start_dim2: 400
-    #end_dim2: 656
-    start_dim0: 89 # (60, 128, 384)
-    end_dim0: 121
-    start_dim1: 540
-    end_dim1: 796
-    start_dim2: 570
-    end_dim2: 826
-  #image_path: ["/Dataset/paired_images/DPM4X/ori/3-2ROI000.tif","/Dataset/paired_images/DPM4X/ft0/3-2ROI000.tif"]  # a list for different input
-  image_path: ["/Dataset/paired_images/DPM4X/ori/OO.tif","/Dataset/paired_images/DPM4X/ft0/MM.tif"]  # a list for different input
+    start_dim0: 189 # (60, 128, 384)
+    end_dim0: 221
+    start_dim1: 120
+    end_dim1: 376
+    start_dim2: 400
+    end_dim2: 656
+  image_path: ["/Dataset/paired_images/DPM4X/ori/3-2ROI000.tif","/Dataset/paired_images/DPM4X/ft0/3-2ROI000.tif"]  # a list for different input
   norm_method: ["exp", "11"]  # normalization method for each data in the list
   exp_trd: [[100, 424], None] # these are parameters for exponential normalization
   exp_ftr: [6, None] # these are parameters for exponential normalization
   trd: [[None], [0, 4]] # this is for standard normalization (min() and max())
   assemble_params:
-    C: 32 # cropped pixels
-    S: 64 # overlapping pixels
+    C: [32, 0, 32] # cropped pixels
+    S: [64, 64, 64] # overlapping pixels
     dx_shape: [ 32, 256, 256 ] # (dz, dx, dy) inference size # upsample size (60, 128, 384) > (384, 128, 384)
     weight_shape: [ 192, 256, 192 ]
     weight_method: "cross"
-    #zrange: [ 32, 129, 16] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
+    zrange: [ 32, 129, 16] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
+    xrange: [ 512, 513, 1 ]
+    yrange: [ 300, 685, 128 ]
+    #zrange: [ 0, 256, 16] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
     #xrange: [ 512, 513, 1 ]
-    #yrange: [ 300, 685, 128 ]
-    zrange: [ 0, 128, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
-    xrange: [ 540, 541, 1 ]
-    yrange: [ 0, 2305, 128 ]
+    #yrange: [ 0, 1024, 128 ]
+
 
 Fly0B:
   dataset: "Fly0B"
   upsample_params: # upsample size (60, 128, 384) > (384, 128, 384)
-    size: [256, 128, 256]
-    # size: [256, 256, 256]
+    size: [256, 256, 256]
   patch_range: # range of original ROI before interpolate
     start_dim0: -32 # (60, 128, 384)s
     end_dim0: null
-    start_dim1: -128
-    # start_dim1: -256
+    start_dim1: -256
     end_dim1: null
     start_dim2: 0
     end_dim2: 256
@@ -54,20 +46,14 @@ Fly0B:
   exp_ftr: [None, ]
   trd: [[None, 3000], ]
   assemble_params:
-    # C: 32 # cropped pixels
-    # S: 64 # overlapping pixels
-    C: [ 32, 16, 32 ] # (z, x, y)
-    S: [ 64, 32, 64 ] # (z, x, y)
-
-    dx_shape: [ 32, 128, 256 ] # (dz, dx, dy) inference size before upsample > (256, 256, 256)
-    weight_shape: [ 192, 96, 192 ]
+    C: 32 # cropped pixels
+    S: 64 # overlapping pixels
+    dx_shape: [ 32, 256, 256 ] # (dz, dx, dy) inference size before upsample > (256, 256, 256)
+    weight_shape: [ 192, 192, 192 ]
     weight_method: "3D"
-    zrange: [ 208, 241, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
-    xrange: [ 640, 769, 64 ] # xrange: [ 640, 769, 64 ]
-    yrange: [ 640, 897, 128 ]
-    # zrange: [ 172, 268, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
-    # xrange: [1024, 1153, 128 ]
-    # yrange: [ 512, 1024, 128 ]
+    zrange: [ 172, 268, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
+    xrange: [1024, 1153, 128 ]
+    yrange: [ 512, 1024, 128 ]
     #zrange: [ 96, 225, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
     #xrange: [ 448, 449, 1 ]
     #yrange: [ 0, 1537, 128 ]

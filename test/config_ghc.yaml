@@ -4,26 +4,26 @@ DPM4X:
   upsample_params: # upsample size (60, 128, 384) > (384, 128, 384)
     size: [32, 256, 256]
   patch_range: # range of original ROI before interpolate
-    start_dim0: 189 # (60, 128, 384)
-    end_dim0: 221
-    start_dim1: 120
-    end_dim1: 376
-    start_dim2: 400
-    end_dim2: 656
-    #start_dim0: 89 # (60, 128, 384)
-    #end_dim0: 121
-    #start_dim1: 540
-    #end_dim1: 796
-    #start_dim2: 570
-    #end_dim2: 826
+    #start_dim0: 189 # (60, 128, 384)
+    #end_dim0: 221
+    #start_dim1: 120
+    #end_dim1: 376
+    #start_dim2: 400
+    #end_dim2: 656
+    start_dim0: 89 # (60, 128, 384)
+    end_dim0: 121
+    start_dim1: 540
+    end_dim1: 796
+    start_dim2: 570
+    end_dim2: 826
     #start_dim0: 29 # (60, 128, 384)
     #end_dim0: 61
     #start_dim1: 540
     #end_dim1: 796
     #start_dim2: 570
     #end_dim2: 826
-  image_path: ["/Dataset/paired_images/DPM4X/ori/3-2ROI000.tif","/Dataset/paired_images/DPM4X/ft0/3-2ROI000.tif"]  # a list for different input
-  #image_path: ["/Dataset/paired_images/DPM4X/ori/DV0.tif","/Dataset/paired_images/DPM4X/ft0/DV0ft0.tif"]  # a list for different input
+  #image_path: ["/Dataset/paired_images/DPM4X/ori/3-2ROI000.tif","/Dataset/paired_images/DPM4X/ft0/3-2ROI000.tif"]  # a list for different input
+  image_path: ["/Dataset/paired_images/DPM4X/ori/OO.tif","/Dataset/paired_images/DPM4X/ft0/MM.tif"]  # a list for different input
   norm_method: ["exp", "11"]  # normalization method for each data in the list
   exp_trd: [[100, 424], None] # these are parameters for exponential normalization
   exp_ftr: [6, None] # these are parameters for exponential normalization
@@ -34,13 +34,12 @@ DPM4X:
     dx_shape: [ 32, 256, 256 ] # (dz, dx, dy) inference size # upsample size (60, 128, 384) > (384, 128, 384)
     weight_shape: [ 192, 192, 192 ]
     weight_method: "cross"
-    zrange: [ 32, 129, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
-    xrange: [ 920, 921, 1 ]
-    yrange: [ 300, 685, 128 ]
-
-    #zrange: [ 0, 128, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
-    #xrange: [ 540, 541, 1 ]
-    #yrange: [ 0, 2305, 128 ]
+    #zrange: [ 32, 129, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
+    #xrange: [ 920, 921, 1 ]
+    #yrange: [ 300, 685, 128 ]
+    zrange: [ 0, 128, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
+    xrange: [ 540, 541, 1 ]
+    yrange: [ 0, 2305, 128 ]
     #zrange: [ 0, 128, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy)
     #xrange: [ 540, 541, 1 ]
     #yrange: [ 0, 2305, 128 ]

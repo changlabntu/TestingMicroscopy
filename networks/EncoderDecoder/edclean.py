@@ -96,14 +96,14 @@ class conv_block(nn.Module):
             # Assuming x comes in with shape (1, C, X, Y, Z)
             x = x.permute(2, 3, 1, 4, 0).squeeze(4)  # (X, Y, C, Z)
             dim0 = x.shape[0]
-            x = x.view(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])  # (X*Y, C, Z)
+            x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])  # (X*Y, C, Z)
         elif self.dim == '2d':
             x = x.permute(3, 1, 2, 4, 0).squeeze(4)  # (Y, C, X, Z)
 
         x = self.conv(x)
 
         if self.dim == '1d':
-            x = x.view(dim0, x.shape[0] // dim0, x.shape[1], x.shape[2]).unsqueeze(4)  # (X, Y, C, Z, 1)
+            x = x.reshape(dim0, x.shape[0] // dim0, x.shape[1], x.shape[2]).unsqueeze(4)  # (X, Y, C, Z, 1)
             x = x.permute(4, 2, 0, 1, 3)  # (1, C, X, Y, Z)
         elif self.dim == '2d':
             x = x.unsqueeze(4).permute(4, 1, 2, 0, 3)  # (1, C, X, Y, Z)
@@ -158,7 +158,7 @@ class deconv3d_bn_block(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, n_channels=1, out_channels=1, nf=32, norm_type='batch', encode='3d', decode='3d',
-                 activation=ACTIVATION, final='tanh', mc=False, residual=None):
+                 activation=ACTIVATION, final='tanh', mc=False, residual=None, x2=False):
         super(Generator, self).__init__()
 
         self.residual = residual

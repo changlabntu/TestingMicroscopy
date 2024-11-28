@@ -27,11 +27,14 @@ def get_gan_out(x0, model):
     if gpu:
         x0 = x0.cuda()
 
-    z = model(x0, method='encode')[-1].detach().cpu()
-    if gpu:
-        z = z.cuda()
-    XupX = model(z, method='decode')['out0'].detach().cpu()
-    XupX = XupX[0, 0, :, :, :]  # (X, Y, Z)
+    if 0:
+        z = model(x0, method='encode')[-1].detach().cpu()
+        if gpu:
+            z = z.cuda()
+        XupX = model(z, method='decode')['out0'].detach().cpu()
+        XupX = XupX[0, 0, :, :, :]  # (X, Y, Z)
+
+    XupX = model(x0)['out0'].detach().cpu()[0, 0, :, :, :]
 
     Xup = x0.detach().cpu().squeeze()#.numpy()
 
@@ -152,7 +155,12 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
 
                 # load and crop
                 x = tiff.imread(source + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif')
-                cropped = x[C0:-C0, C1:-C1, C2:-C2]
+                if C0 > 0:
+                    cropped = x[C0:-C0, :, :]
+                if C1 > 0:
+                    cropped = cropped[:, C1:-C1, :]
+                if C2 > 0:
+                    cropped = cropped[:, :, C2:-C2]
                 # ipdb.set_trace()
                 cropped = np.multiply(cropped, w)
                 if len(one_row) > 0:
@@ -410,7 +418,7 @@ if __name__ == '__main__':
     parser = test_args()
     args = parser.parse_args()
     # Data parameters
-    config, kwargs = get_args(option=args.option, config_name='test/config_ghc.yaml')
+    config, kwargs = get_args(option=args.option, config_name='test/config.yaml')
     print(kwargs)
 
     model_type = args.model_type
@@ -426,14 +434,11 @@ if __name__ == '__main__':
     # Data
     x0 = get_data(kwargs)
     for i in range(len(x0)):
-        print(i)
-        print((x0[i].min(), x0[i].max()))
         x0[i] = norm_x0(x0[i], kwargs['norm_method'][i],
                         kwargs['exp_trd'][i], kwargs['exp_ftr'][i], kwargs['trd'][i])
-        print((x0[i].min(), x0[i].max()))
 
     # single test
-    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][2:], **kwargs)
+    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][:], **kwargs)
     out = out.mean(axis=3)
 
     # save single output
@@ -464,8 +469,13 @@ if __name__ == '__main__':
 
     # USAGE
     # DPM4X:
-    # python test_combine.py  --prj /ae/iso0_ldmaex2_lb10_tc/ --epoch 2300 --model_type AE --option DPM4X --gpu --assemble
-    # python test_combine.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --option DPM4X --gpu --hbranchz --assemble
+    # python test_combine.py  --prj /ae/iso0_ldmaex2_lb10_tc/ --epoch 2300 --model_type AE --option DPM4X --gpu --reverselog --assemble
+    # python test_combine.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --option DPM4X --gpu --hbranchz --reverselog --assemble
+    # python test_combine.py  --prj /IsoMRIclean/gd1331/--epoch 600 --model_type GAN --option DPM4X --gpu --reverselog --assemble
+
+    # python test_combine.py  --prj /ae/cut/lamb20NCE2lr1/ --epoch 2500 --model_type AE --option DPM4X --gpu --hbranchz --reverselog
+
+
     # Fly0B:
     #   GAN:
     #   python test_combine.py  --prj /IsoScopeXXcut/ngf32lb10/ --epoch 5000 --model_type GAN --option Fly0B --gpu
