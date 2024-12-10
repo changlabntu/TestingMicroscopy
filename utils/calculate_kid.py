@@ -1,8 +1,8 @@
 import torch
 import torchmetrics
-from torchmetrics.image.kid import KernelInceptionDistance
-from torchmetrics.image.fid import FrechetInceptionDistance
-from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from torchmetrics.image.kid import KID
+from torchmetrics.image.fid import FID
+#from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from torchvision import transforms
 from PIL import Image
 import os
@@ -32,9 +32,9 @@ def calculate_metrics(option, folder1, folder2, irange, subset_size=50):
 
     # Initialize metrics
     if option == 'kid':
-        metrics = KernelInceptionDistance(subset_size=subset_size).cuda()
+        metrics = KID(subset_size=subset_size).cuda()
     elif option == 'fid':
-        metrics = FrechetInceptionDistance().cuda()
+        metrics = FID().cuda()
     elif option == 'lpips':
         metrics = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
 
@@ -62,9 +62,12 @@ def calculate_metrics(option, folder1, folder2, irange, subset_size=50):
 if __name__ == '__main__':
     # All: 353: 216
     # Usage
-    folder1 = "/media/ExtHDD01/oai_diffusion_interpolated/original/expanded3d/xya2d"
+
+    root = '/media/ghc/Ghc_data3/OAI_diffusion_final/isotropic_outs/outputs_all/IsoLambda0/png/'
+
+    folder1 = root + 'xy2d/'
     #folder2 = "/media/ExtHDD01/oai_diffusion_interpolated/original/expanded3d/zya2d"
-    folder2 = "/media/ExtHDD01/oai_diffusion_interpolated/test/expanded3d/zxa3d"
+    folder2 = root + 'xz/'
     metric_mean = calculate_metrics('kid', folder1, folder2, irange=(0, 1840, 512))
     #kid  zx: 0.337, 0.1957  zy:  0.307, 0.208
     #fid  zx: 300, 198  zy:  280, 208

@@ -34,7 +34,8 @@ def get_gan_out(x0, model):
         XupX = model(z, method='decode')['out0'].detach().cpu()
         XupX = XupX[0, 0, :, :, :]  # (X, Y, Z)
 
-    XupX = model(x0)['out0'].detach().cpu()[0, 0, :, :, :]
+    print(x0.shape)
+    XupX = model(x0)['out0'].detach().cpu()[0, 0, :, :, :]   # out0 for original, out1 for psuedo-mask
 
     Xup = x0.detach().cpu().squeeze()#.numpy()
 
@@ -76,13 +77,10 @@ def get_ae_out(x0, model):
 def test_model(x0, model, input_augmentation=None, **kwargs):
     out_all = []
     for m in range(mc):
-        patch = [x[:, :, kwargs['patch_range']['start_dim0']:kwargs['patch_range']['end_dim0'],
-            kwargs['patch_range']['start_dim1']:kwargs['patch_range']['end_dim1'],
-            kwargs['patch_range']['start_dim2']:kwargs['patch_range']['end_dim2']] for x in x0]
+        d0 = kwargs['patch_range']['d0']
+        dx = kwargs['patch_range']['dx']
 
-        # ipdb.set_trace()
-        #assert list(patch[0].squeeze().numpy().shape) == kwargs['assemble_params']['dx_shape']
-        # print((patch[0].squeeze().numpy().shape, kwargs['assemble_params']['dx_shape']))
+        patch = [x[:, :, d0[0]:d0[0]+dx[0], d0[1]:d0[1]+dx[1], d0[2]:d0[2]+dx[2]] for x in x0]
 
         patch = torch.cat([upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
@@ -134,7 +132,7 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
     # S = kwargs['assemble_params']['S']
 
     one_stack = []
-    for nx in tqdm(range(len(xrange))):
+    for nx in range(len(xrange)):
         one_column = []
         for nz in range(len(zrange)):
             one_row = []
@@ -195,13 +193,11 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
 
 
 def test_over_volumne(kwargs, dx, dy, dz, zrange, xrange, yrange, destination, input_augmentation):
-    for ix in tqdm(xrange):
-        for iz in zrange:
+    for ix in xrange:
+        for iz in tqdm(zrange):
             for iy in yrange:
-                print((iz, ix, iy))
-                kwargs['patch_range'] = {'start_dim0': iz, 'end_dim0': iz + dz,
-                                         'start_dim1': ix, 'end_dim1': ix + dx,
-                                         'start_dim2': iy, 'end_dim2': iy + dy}
+                kwargs['patch_range']['d0'] = [iz, ix, iy]
+                kwargs['patch_range']['dx'] = [dz, dx, dy]
 
                 out_all, patch = test_model(x0, model, input_augmentation=input_augmentation, **kwargs)
                 out = out_all.mean(axis=3).astype(np.float32)
@@ -239,10 +235,10 @@ def get_model(dataset, prj, epoch, model_type, gpu):
         model = model_module.GAN(args, train_loader=None, eval_loader=None, checkpoints=None)
         model = load_pth(model, root=root, epoch=epoch, model_names=component_names)
 
-    if model_type == 'GAN':
-        upsample = torch.nn.Upsample(size=kwargs['upsample_params']['size'], mode='trilinear')
-    else:
-        upsample = torch.nn.Upsample((32, 256, 256), mode='trilinear')
+    #if model_type == 'GAN':
+    upsample = torch.nn.Upsample(size=kwargs['upsample_params']['size'], mode='trilinear')
+    #else:
+    #    upsample = torch.nn.Upsample((32, 256, 256), mode='trilinear')
     if gpu:
         model = model.cuda()
         upsample = upsample.cuda()
@@ -337,7 +333,7 @@ def get_args(option, config_name):
 
 
 def get_data(kwargs):
-    image_path = [path_source + x for x in kwargs.get("image_path")]  # if image path is a file
+    image_path = [x for x in kwargs.get("image_path")]  # if image path is a file
     image_list_path = kwargs.get("image_list_path")  # if image path is a directory
 
     x0 = []
@@ -399,7 +395,8 @@ def test_time_augementation(x, method):
 def test_args():
     parser = argparse.ArgumentParser()
     # projects
-    parser.add_argument('--option', type=str, default="Fly0B", help='which dataset to use')
+    parser.add_argument('--config', type=str, default="config", help='which config file')
+    parser.add_argument('--option', type=str, default="Default", help='which dataset to use')
     parser.add_argument('--prj', type=str, default="/ae/cut/1/", help='name of the project')
     parser.add_argument('--epoch', type=str, default='3000', help='epoch #')
     parser.add_argument('--model_type', type=str, default='AE', help='GAN or AE')
@@ -418,7 +415,7 @@ if __name__ == '__main__':
     parser = test_args()
     args = parser.parse_args()
     # Data parameters
-    config, kwargs = get_args(option=args.option, config_name='test/config.yaml')
+    config, kwargs = get_args(option=args.option, config_name='test/' + args.config + '.yaml')
     print(kwargs)
 
     model_type = args.model_type
@@ -467,17 +464,17 @@ if __name__ == '__main__':
                                     source=destination + '/cycout/ori/')
 
 
+
     # USAGE
-    # DPM4X:
-    # python test_combine.py  --prj /ae/iso0_ldmaex2_lb10_tc/ --epoch 2300 --model_type AE --option DPM4X --gpu --reverselog --assemble
-    # python test_combine.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --option DPM4X --gpu --hbranchz --reverselog --assemble
-    # python test_combine.py  --prj /IsoMRIclean/gd1331/--epoch 600 --model_type GAN --option DPM4X --gpu --reverselog --assemble
-
-    # python test_combine.py  --prj /ae/cut/lamb20NCE2lr1/ --epoch 2500 --model_type AE --option DPM4X --gpu --hbranchz --reverselog
-
-
-    # Fly0B:
+    # Fly0B (This is the "10X" fly data):
     #   GAN:
-    #   python test_combine.py  --prj /IsoScopeXXcut/ngf32lb10/ --epoch 5000 --model_type GAN --option Fly0B --gpu
+    #   python test_combine.py  --prj /IsoScopeXXcut/ngf32lb10/ --epoch 5000 --model_type GAN --gpu
     #   AE: (This on has "--hbranchz")
-    #   python test_combine.py  --prj /ae/cut/1/ --epoch 3000 --model_type AE --option Fly0B --gpu --hbranchz
+    #   python test_combine.py  --prj /ae/cut/1/ --epoch 3000 --model_type AE --gpu --hbranchz
+
+    # DPM4X: (This is the main data)
+    #   python test_combine.py  --prj /ae/iso0_ldmaex2_lb10_tc/ --epoch 2300 --model_type AE --gpu --reverselog --assemble
+    #   python test_combine.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --assemble
+
+
+
