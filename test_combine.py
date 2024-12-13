@@ -6,6 +6,8 @@ import shutil
 import sys
 import time
 
+import threading
+import queue
 import ipdb
 import numpy as np
 import torch
@@ -79,6 +81,18 @@ def get_ae_out(args, x0, model):
 
 
 def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", args=None, **kwargs):
+    """
+        print([i for i in xrange]) # [300, 428]
+        print([i for i in zrange]) # [32, 48, 64, 80, 96, 112]
+        print([i for i in yrange]) # [300, 428, 556, 684]
+        dX : inference size : 32, 256, 256
+        assert 0
+        for ix in xrange:
+            for iz in tqdm(zrange):
+                for iy in yrange:
+                    kwargs['patch_range']['d0'] = [iz, ix, iy]
+                    kwargs['patch_range']['dx'] = [dz, dx, dy]
+    """
 
     mc = args.mc
     out_all = []
@@ -99,7 +113,7 @@ def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", ar
             if model_type == 'GAN':
                 out, Xup = get_gan_out(args, input, model)
             elif model_type == 'AE':
-                out, Xup = get_ae_out(args, input, model)   # (Z, X, Y)
+                out, Xup = get_ae_out(args, input, model)   # (Z, C, X, Y)
 
             # augmentation back
             out = test_time_augementation(out.unsqueeze(1), method=aug)
@@ -191,32 +205,91 @@ def assemble_microscopy_volumne(kwargs, zrange, xrange, yrange, source):
 
     tiff.imwrite(source[:-1] + '.tif', one_stack)
 
+def writer_thread_func(write_queue, destination, args):
+    while True:
+        item = write_queue.get()
+        if item is None:
+            write_queue.task_done()
+            break  # 終止信號
+        iz, ix, iy, out, patch, out_all_std = item
+        try:
+            # 寫入文件
+            tiff.imwrite(f"{destination}/xy/{iz}_{ix}_{iy}.tif", out)
+            tiff.imwrite(f"{destination}/ori/{iz}_{ix}_{iy}.tif", patch)
+            if args.mc > 1:
+                tiff.imwrite(f"{destination}/xyvar/{iz}_{ix}_{iy}.tif", out_all_std)
+        except Exception as e:
+            print(f"Error writing files for patch ({iz}, {ix}, {iy}): {e}")
+        finally:
+            write_queue.task_done()
 
-def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, yrange, destination, input_augmentation, model_type, args):
-    mc = args.mc
-    # print([i for i in xrange]) # [300, 428]
-    # print([i for i in zrange]) # [32, 48, 64, 80, 96, 112]
-    # print([i for i in yrange]) # [300, 428, 556, 684]
-    # assert 0
-    for ix in xrange:
-        for iz in tqdm(zrange):
-            for iy in yrange:
-                kwargs['patch_range']['d0'] = [iz, ix, iy]
-                kwargs['patch_range']['dx'] = [dz, dx, dy]
 
-                out_all, patch = test_model(x0, model, upsample, input_augmentation=input_augmentation, model_type=model_type, args=args, **kwargs)
-                out = out_all.mean(axis=3).astype(np.float32)
+def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, yrange, destination,
+                               input_augmentation, model_type, args):
 
-                if args.reverselog:
-                    out = reverse_log(out)
-                    patch = reverse_log(patch)
+    # 初始化寫入隊列和寫入線程
+    write_queue = queue.Queue(maxsize=100)  # 控制隊列大小以限制內存使用
+    writer_thread = threading.Thread(target=writer_thread_func, args=(write_queue, destination, args))
+    writer_thread.start()
 
-                tiff.imwrite(destination + 'xy/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out)
-                tiff.imwrite(destination + 'ori/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', patch)
+    try:
+        for ix in xrange:
+            for iz in tqdm(zrange):
+                for iy in yrange:
+                    # 設置 patch_range
+                    kwargs['patch_range']['d0'] = [iz, ix, iy]
+                    kwargs['patch_range']['dx'] = [dz, dx, dy]
 
-                if mc > 1:
-                    tiff.imwrite(destination + 'xyvar/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out_all.std(axis=3).astype(np.float32))
+                    # 模型推理
+                    out_all, patch = test_model(x0, model, upsample, input_augmentation, model_type, args, **kwargs)
 
+                    # 處理輸出
+                    out = out_all.mean(axis=3).astype(np.float32)
+                    if args.reverselog:
+                        out = reverse_log(out)
+                        patch = reverse_log(patch)
+
+                    # 將寫入任務加入隊列
+                    write_queue.put((iz, ix, iy, out, patch, out_all_std))
+    except Exception as e:
+        print(f"Error during processing: {e}")
+    finally:
+        # 所有任務完成後，發送終止信號
+        write_queue.put(None)
+        writer_thread.join()
+
+    # 確保所有寫入任務完成
+    write_queue.join()
+
+
+# def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, yrange, destination, input_augmentation, model_type, args):
+#     mc = args.mc
+#     # print([i for i in xrange]) # [300, 428]
+#     # print([i for i in zrange]) # [32, 48, 64, 80, 96, 112]
+#     # print([i for i in yrange]) # [300, 428, 556, 684]
+#     # assert 0
+#     import time
+#     start = time.time()
+#     for ix in xrange:
+#         for iz in tqdm(zrange):
+#             for iy in yrange:
+#                 kwargs['patch_range']['d0'] = [iz, ix, iy]
+#                 kwargs['patch_range']['dx'] = [dz, dx, dy]
+#
+#                 out_all, patch = test_model(x0, model, upsample, input_augmentation=input_augmentation, model_type=model_type, args=args, **kwargs)
+#                 out = out_all.mean(axis=3).astype(np.float32)
+#
+#                 if args.reverselog:
+#                     out = reverse_log(out)
+#                     patch = reverse_log(patch)
+#
+#                 tiff.imwrite(destination + 'xy/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out)
+#                 tiff.imwrite(destination + 'ori/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', patch)
+#
+#                 if mc > 1:
+#                     tiff.imwrite(destination + 'xyvar/' + str(iz) + '_' + str(ix) + '_' + str(iy) + '.tif', out_all.std(axis=3).astype(np.float32))
+#     end = time.time()
+#     print("all time : ", end - start)
 
 def get_model(kwargs, prj, epoch, model_type, gpu, path_source):
     #dataset = kwargs['dataset']
