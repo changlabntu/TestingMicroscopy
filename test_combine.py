@@ -23,6 +23,9 @@ from utils.data_utils import imagesc
 from utils.model_utils import read_json_to_args, import_model, load_pth
 
 
+import tracemalloc
+tracemalloc.start()
+
 def get_gan_out(args, x0, model):
     #x0 = [x.unsqueeze(0).unsqueeze(0).float().permute(0, 1, 3, 4, 2) for x in x0]
     #x0 = torch.cat(x0, dim=1).cuda()  # concatenate all the input channels
@@ -40,7 +43,8 @@ def get_gan_out(args, x0, model):
         XupX = XupX[0, 0, :, :, :]  # (X, Y, Z)
 
     print(x0.shape)
-    XupX = model(x0)['out0'].detach().cpu()[0, 0, :, :, :]   # out0 for original, out1 for psuedo-mask
+    with torch.cuda.amp.autocast(enabled=args.fp16):
+        XupX = model(x0)['out0'].detach().cpu()[0, 0, :, :, :]   # out0 for original, out1 for psuedo-mask
 
     Xup = x0.detach().cpu().squeeze()#.numpy()
 
@@ -57,7 +61,8 @@ def get_ae_out(args, x0, model):
         x0 = x0.cuda()
     hb_all = []
     for z in range(0, 32, 4):
-        reconstructions, posterior, hbranch = model.forward(x0[z:z+4, :, :, :], sample_posterior=False)
+        with torch.cuda.amp.autocast(enabled=args.fp16):
+            reconstructions, posterior, hbranch = model.forward(x0[z:z+4, :, :, :], sample_posterior=False)
         if hbranchz:
             hb_all.append(posterior.sample())
         else:
@@ -95,6 +100,7 @@ def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", ar
     """
 
     mc = args.mc
+    scaler = torch.cuda.amp.GradScaler(enabled=args.fp16 and args.gpu)  # 初始化 scaler
     out_all = []
     for m in range(mc):
         d0 = kwargs['patch_range']['d0']
@@ -110,10 +116,18 @@ def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", ar
             input = test_time_augementation(patch, method=aug)
 
             # here is the forward
-            if model_type == 'GAN':
-                out, Xup = get_gan_out(args, input, model)
-            elif model_type == 'AE':
-                out, Xup = get_ae_out(args, input, model)   # (Z, C, X, Y)
+            if args.fp16 and args.gpu:
+                input = input.half()
+                with torch.cuda.amp.autocast():
+                    if model_type == 'GAN':
+                        out, Xup = get_gan_out(args, input, model)
+                    elif model_type == 'AE':
+                        out, Xup = get_ae_out(args, input, model)
+            else:
+                if model_type == 'GAN':
+                    out, Xup = get_gan_out(args, input, model)
+                elif model_type == 'AE':
+                    out, Xup = get_ae_out(args, input, model)   # (Z, C, X, Y)
 
             # augmentation back
             out = test_time_augementation(out.unsqueeze(1), method=aug)
@@ -226,7 +240,8 @@ def writer_thread_func(write_queue, destination, args):
 
 def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, yrange, destination,
                                input_augmentation, model_type, args):
-
+    import time
+    start = time.time()
     # 初始化寫入隊列和寫入線程
     write_queue = queue.Queue(maxsize=100)  # 控制隊列大小以限制內存使用
     writer_thread = threading.Thread(target=writer_thread_func, args=(write_queue, destination, args))
@@ -250,7 +265,7 @@ def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, y
                         patch = reverse_log(patch)
 
                     # 將寫入任務加入隊列
-                    write_queue.put((iz, ix, iy, out, patch, out_all_std))
+                    write_queue.put((iz, ix, iy, out, patch, out_all.std(axis=3)))
     except Exception as e:
         print(f"Error during processing: {e}")
     finally:
@@ -260,6 +275,8 @@ def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, y
 
     # 確保所有寫入任務完成
     write_queue.join()
+    end = time.time()
+    print("all time : ", end - start)
 
 
 # def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, yrange, destination, input_augmentation, model_type, args):
@@ -291,7 +308,7 @@ def test_over_volumne(x0, model, upsample, kwargs, dx, dy, dz, zrange, xrange, y
 #     end = time.time()
 #     print("all time : ", end - start)
 
-def get_model(kwargs, prj, epoch, model_type, gpu, path_source):
+def get_model(kwargs, prj, epoch, model_type, gpu, path_source, fp16=False):
     #dataset = kwargs['dataset']
     #prj = kwargs['prj']
     #epoch = kwargs['epoch']
@@ -320,6 +337,11 @@ def get_model(kwargs, prj, epoch, model_type, gpu, path_source):
     if gpu:
         model = model.cuda()
         upsample = upsample.cuda()
+
+    if fp16:
+        model = model.half()
+        # upsample trillinear not support fp16
+        # upsample = upsample.half()
 
     for param in model.parameters():
         param.requires_grad = False
@@ -411,7 +433,7 @@ def get_args(option, config_name):
 
 
 def get_data(kwargs):
-    image_path = [x for x in kwargs.get("image_path")]  # if image path is a file
+    image_path = [x for x in kwargs.get("image_path", [])]  # if image path is a file
     image_list_path = kwargs.get("image_list_path")  # if image path is a directory
 
     x0 = []
@@ -419,12 +441,20 @@ def get_data(kwargs):
         for i in range(len(image_path)):
             x0.append(tiff.imread(image_path[i]))
 
+    # I'm not sure image list path is used for 2D images or need deal with many 3D images cube
+    # new method with 2D loading images
+    # assert 2D image is (X, Y) output will be [(Z, X, Y), (Z, X, Y)]
     elif image_list_path:
-        for i in range(len(image_list_path)):
-            x_list = sorted(glob.glob(image_list_path[i]))
-            if not x_list:
-                raise ValueError(f"No images found at {image_list_path[i]}")
-            x0.append(tiff.imread(x_list[kwargs.get("image_list_index")]))
+        # for i in range(len(image_list_path)):
+        #     x_list = sorted(glob.glob(image_list_path[i]))
+        #     if not x_list:
+        #         raise ValueError(f"No images found at {image_list_path[i]}")
+        #     x0.append(tiff.imread(x_list[kwargs.get("image_list_index")]))
+        ids = sorted(os.listdir(image_list_path[0]))
+        for i in image_list_path:
+            x0.append(np.stack([tiff.imread(os.path.join(i, id)) for id in ids], 0))
+
+
     else:
         raise ValueError("No valid image path provided.")
     return x0
@@ -482,6 +512,7 @@ def test_args():
     parser.add_argument('--assemble', action='store_true', default=False)
     parser.add_argument('--hbranchz', action='store_true', default=False)
     parser.add_argument('--gpu', action='store_true', default=False)
+    parser.add_argument('--fp16', action='store_true', default=False, help='Enable FP16 inference')
     parser.add_argument('--mode', type=str, default='dummy')
     parser.add_argument('--port', type=str, default='dummy')
     parser.add_argument('--host', type=str, default='dummy')
@@ -501,7 +532,7 @@ def test_entry_point():
     destination = config['DESTINATION'] + kwargs["dataset"]
 
     # get model
-    model, upsample = get_model(kwargs, args.prj, args.epoch, args.model_type, args.gpu, config['SOURCE'])
+    model, upsample = get_model(kwargs, args.prj, args.epoch, args.model_type, args.gpu, config['SOURCE'], fp16=args.fp16)
 
     # get data, then get normalization function
     x0 = get_data(kwargs)
@@ -545,7 +576,13 @@ def test_entry_point():
 if __name__ == '__main__':
     test_entry_point()
 
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"當前: {current / 10 ** 6} MB")
+    print(f"峰值: {peak / 10 ** 6} MB")
 
+    # 停止追蹤
+    tracemalloc.stop()
+    assert 0
 
     # USAGE
     # Fly0B (This is the "10X" fly data):
