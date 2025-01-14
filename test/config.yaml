@@ -1,4 +1,5 @@
-SOURCE: '/media/ExtHDD01/'
+SOURCE: '/home/ubuntu/Data/TestingMicroscopy'
+DESTINATION: '/home/tzui/Project/TestingMicroscopy/Dataset/paired_images/'
 Default:
   dataset: "DPM4X"
   upsample_params: # upsample size, same with dx if no upsample
@@ -7,7 +8,8 @@ Default:
     #d0: [20, 128, 128]
     d0: [189, 120, 400]
     dx: [32, 256, 256]
-  image_path: ["/media/ExtHDD01/Dataset/paired_images/DPM4X/ori/3-2ROI000.tif","/media/ExtHDD01/Dataset/paired_images/DPM4X/ft0/3-2ROI000.tif"]
+#  image_path: ["/home/ubuntu/Data/TestingMicroscopy/DPM4X/ori/3-2ROI000.tif","/home/ubuntu/Data/TestingMicroscopy/DPM4X/ft0/3-2ROI000.tif"]
+  image_list_path: ["/home/tzui/Dataset/DPM4X/ori/3-2ROI000", "/home/tzui/Dataset/DPM4X/ft0/3-2ROI000"]
   #image_path: ["/media/ghc/Ghc_data3/Chu_full_brain/DPM_VMAT_0718/DPM/4x_VT64246_classical-2_GFP-488_VMAT-Rho_DLG-647_40xw_z1_stitch_C2_ROI001.tif", "/media/ghc/Ghc_data3/Chu_full_brain/DPM_VMAT_0718/DPM/4x_VT64246_classical-2_GFP-488_VMAT-Rho_DLG-647_40xw_z1_stitch_C2_ROI001.tif"]  # a list for different input
   #image_path: ["/media/ghc/Ghc_data3/Chu_full_brain/DPM_VMAT_0718/VMAT/ROI001.tif", "/media/ghc/Ghc_data3/Chu_full_brain/DPM_VMAT_0718/VMAT/ROI001.tif"]
   norm_method: ["exp", "11"]  # normalization method for each data in the list

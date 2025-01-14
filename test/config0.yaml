@@ -1,4 +1,5 @@
 SOURCE: '/media/ExtHDD01/'
+DESTINATION: '/home/tzui/Project/TestingMicroscopy/Dataset/paired_images/'
 DPM4X:
   dataset: "DPM4X"
   upsample_params: # upsample size (60, 128, 384) > (384, 128, 384)
