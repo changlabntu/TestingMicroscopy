@@ -19,12 +19,13 @@ from tqdm import tqdm
 
 import networks
 import models
-from utils.data_utils import imagesc
-from utils.model_utils import read_json_to_args, import_model, load_pth
+from utils.data_utils import imagesc, DataNormalization
+from utils.model_utils import read_json_to_args, import_model, load_pth, ModelProcesser
 
 import zarr
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from torch.utils.data import DataLoader, Dataset
 
 """
 1. Inference model
@@ -75,16 +76,83 @@ def create_tapered_weight(S0, S1, S2, nz, nx, ny, size, edge_size: int = 64) -> 
 
     return weight
 
-def recreate_volume_folder(destination, mc=1):
+def recreate_volume_folder(destination, mc=1, folder=["xy", "ori", "seg"]):
     # remove and recreate the folder
-    if os.path.exists(destination + 'xy/'):
-        shutil.rmtree(destination + 'xy/')
-    if os.path.exists(destination + 'ori/'):
-        shutil.rmtree(destination + 'ori/')
-    os.makedirs(destination + 'xy/', exist_ok=True)
-    os.makedirs(destination + 'ori/', exist_ok=True)
+    if os.path.exists(os.path.join(destination, 'xy')) and "xy" in folder:
+        shutil.rmtree(os.path.join(destination, 'xy'))
+    if os.path.exists(os.path.join(destination, 'ori')) and "ori" in folder:
+        shutil.rmtree(os.path.join(destination, 'ori'))
+    if os.path.exists(os.path.join(destination, 'seg')) and "seg" in folder:
+        shutil.rmtree(os.path.join(destination, 'seg'))
+    if os.path.exists(os.path.join(destination, 'recon')) and "recon" in folder:
+        shutil.rmtree(os.path.join(destination, 'recon'))
+    if os.path.exists(os.path.join(destination, 'hbranch')) and "hbranch" in folder:
+        shutil.rmtree(os.path.join(destination, 'hbranch'))
+    os.makedirs(os.path.join(destination, 'xy'), exist_ok=True)
+    os.makedirs(os.path.join(destination, 'ori'), exist_ok=True)
+    os.makedirs(os.path.join(destination, 'seg'), exist_ok=True)
+    os.makedirs(os.path.join(destination, 'recon'), exist_ok=True)
+    os.makedirs(os.path.join(destination, 'hbranch'), exist_ok=True)
     if mc > 1:
-        os.makedirs(destination + 'xyvar/')
+        if os.path.exists(os.path.join(destination, 'xyvar')):
+            shutil.rmtree(os.path.join(destination, 'xyvar'))
+        os.makedirs(os.path.join(destination, 'xyvar'))
+
+def writer_thread_func(write_queue, destination, args):
+    while True:
+        item = write_queue.get()
+        if item is None:
+            write_queue.task_done()
+            break  # 終止信號
+
+        mode = item[0]
+        try:
+            if mode == "decode":
+                # 從 test_model 來的結果
+                _, iz, ix, iy, out_all_mean, out_all_std, out_seg_all = item
+                if args.reverselog:
+                    out_all_mean = reverse_log(out_all_mean)
+
+                tiff.imwrite(os.path.join(destination, "xy", f"{iz}_{ix}_{iy}.tif"), out_all_mean)
+                if args.save_seg:
+                    tiff.imwrite(os.path.join(destination, "seg", f"{iz}_{ix}_{iy}.tif"), out_seg_all)
+                if int(args.mc) > 1:
+                    tiff.imwrite(os.path.join(destination, "xyvar", f"{iz}_{ix}_{iy}.tif"), out_all_std)
+            elif mode == "full":
+                # 從 test_model 來的結果
+                _, iz, ix, iy, out_all_mean, patch, out_all_std, out_seg_all = item
+
+                if args.reverselog:
+                    out_all_mean = reverse_log(out_all_mean)
+                    patch = reverse_log(patch)
+
+                # 依據模式將檔案寫入指定子資料夾
+
+                tiff.imwrite(os.path.join(destination, "xy", f"{iz}_{ix}_{iy}.tif"), out_all_mean)
+                tiff.imwrite(os.path.join(destination, "ori", f"{iz}_{ix}_{iy}.tif"), patch)
+                if args.save_seg:
+                    tiff.imwrite(os.path.join(destination, "seg", f"{iz}_{ix}_{iy}.tif"), out_seg_all)
+                if int(args.mc) > 1:
+                    tiff.imwrite(os.path.join(destination, "xyvar", f"{iz}_{ix}_{iy}.tif"), out_all_std)
+
+            elif mode == "encode":
+                # 從 test_ae_encode 來的結果
+                _, iz, ix, iy, reconstructions, ori, hbranch = item
+
+                if args.reverselog:
+                    reconstructions = reverse_log(reconstructions)
+                    ori = reverse_log(ori)
+
+                tiff.imwrite(os.path.join(destination, "recon", f"{iz}_{ix}_{iy}.tif"), reconstructions)
+                tiff.imwrite(os.path.join(destination, "ori", f"{iz}_{ix}_{iy}.tif"), ori)
+                np.save(os.path.join(destination, "hbranch", f"{iz}_{ix}_{iy}.npy"), hbranch)
+            else:
+                print(f"未知的模式: {mode}")
+
+        except Exception as e:
+            print(f"Error writing files (mode={mode}): {e}")
+        finally:
+            write_queue.task_done()
 
 class MicroTest:
     def __init__(self):
@@ -93,6 +161,9 @@ class MicroTest:
 
         # Init model and upsample
         self.model, self.upsample = None, None
+        self.save_image_datatype = "uint16" # uint8 # float32 # uint16
+        self.normalization = DataNormalization(backward_type=self.save_image_datatype)
+
 
     def init_params(self):
         # Init / Update Model Args
@@ -116,6 +187,7 @@ class MicroTest:
         parser.add_argument('--fp16', action='store_true', default=False, help='Enable FP16 inference')
         parser.add_argument('--reverselog', action='store_true', default=False)
         parser.add_argument('--assemble_method', type=str, default='tiff', help='tiff or zarr method while assemble images')
+        parser.add_argument('--save_seg', action='store_true', default=False)
 
         return parser.parse_args()
 
@@ -138,9 +210,9 @@ class MicroTest:
             print(model_name)
             model = torch.load(model_name, map_location=torch.device('cpu'))
 
-            # rergister model method
-            from utils.model_utils import get_gan_out
-            self.get_model_result = get_gan_out
+            # # rergister model method
+            # from utils.model_utils import get_gan_out
+            # self.get_model_result = get_gan_out
 
         # get AE model
         if self.args.model_type == 'AE':
@@ -153,9 +225,9 @@ class MicroTest:
             model = model_module.GAN(args, train_loader=None, eval_loader=None, checkpoints=None)
             model = load_pth(model, root=root, epoch=self.args.epoch, model_names=component_names)
 
-            # rergister model method
-            from utils.model_utils import get_ae_out
-            self.get_model_result = get_ae_out
+            # # rergister model method
+            # from utils.model_utils import get_ae_out
+            # self.get_model_result = get_ae_out
 
         if self.args.model_type in ['AE', 'GAN', 'Upsample']:
             upsample = torch.nn.Upsample(size=self.kwargs['upsample_params']['size'], mode='trilinear')
@@ -170,18 +242,20 @@ class MicroTest:
                 model = model.half()
         self.model = model
         self.upsample = upsample
+        self.model_processer = ModelProcesser(self.args, self.model, self.upsample)
 
     def get_data(self, norm=True):
         # 我覺得這要改，有兩種情況，一她只要開圖存，不見得真的要paired data,二 他要inference
         image_path = [x for x in self.kwargs.get("image_path", [])]  # if image path is a file
         image_list_path = self.kwargs.get("image_list_path")  # if image path is a directory
+        hbranch_path = self.kwargs.get("hbranch_path")
 
         x0 = []
         if image_path:
             for i in range(len(image_path)):
                 img = tiff.imread(image_path[i])
                 if norm:
-                    img = self._norm_x0(img, self.kwargs["norm_method"][i],
+                    img = self.normalization.forward_normalization(img, self.kwargs["norm_method"][i],
                                        self.kwargs['exp_trd'][i], self.kwargs['exp_ftr'][i], self.kwargs['trd'][i])
                 x0.append(img)
 
@@ -189,13 +263,32 @@ class MicroTest:
         # new method with 2D loading images
         # assert 2D image is (X, Y) output will be [(Z, X, Y), (Z, X, Y)]
         elif image_list_path:
-            ids = sorted(os.listdir(image_list_path[0]))
             for num, i in enumerate(image_list_path):
+                ids = sorted(os.listdir(image_list_path[num]))
                 img = np.stack([tiff.imread(os.path.join(i, id)) for id in ids], 0)
                 if norm:
-                    img = self._norm_x0(img, self.kwargs["norm_method"][num],
+                    img = self.normalization.forward_normalization(img, self.kwargs["norm_method"][num],
                                        self.kwargs['exp_trd'][num], self.kwargs['exp_ftr'][num], self.kwargs['trd'][num])
                 x0.append(img)
+
+        elif hbranch_path:
+            class HbranchDataset(Dataset):
+                def __init__(self, folder):
+                    # 搜尋資料夾下所有 npy 檔案，並根據檔名排序（你也可以根據需要修改排序規則）
+                    self.files = sorted(glob.glob(os.path.join(folder, "*.npy")))
+                    if len(self.files) == 0:
+                        raise ValueError(f"No .npy files found in {folder}")
+
+                def __len__(self):
+                    return len(self.files)
+
+                def __getitem__(self, idx):
+                    # 載入 npy 檔案，可以視需要加入資料轉換（例如轉成 torch.Tensor）
+                    return np.load(self.files[idx], allow_pickle=True), self.files[idx]
+
+            hbranch_dataset = HbranchDataset(hbranch_path)
+            # 這裡預設 batch_size 為 1，你可以根據需求調整 batch_size 與 shuffle 設定
+            x0 = DataLoader(hbranch_dataset, batch_size=1, shuffle=False)
 
         else:
             raise ValueError("No valid image path provided.")
@@ -206,15 +299,15 @@ class MicroTest:
 
         scaler = torch.cuda.amp.GradScaler(enabled=self.args.fp16 and self.args.gpu)  # 初始化 scaler
         out_all = []
+        out_seg_all = []
         for m in range(self.args.mc):
             d0 = self.kwargs['patch_range']['d0']
             dx = self.kwargs['patch_range']['dx']
-
             patch = [x[:, :, d0[0]:d0[0] + dx[0], d0[1]:d0[1] + dx[1], d0[2]:d0[2] + dx[2]] for x in x0]
-
             patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
             out_aug = []
+            out_seg_aug = []
             for i, aug in enumerate(input_augmentation):  # (Z, C, X, Y)
                 # augmentation
                 input = self._test_time_augementation(patch, method=aug)
@@ -223,41 +316,70 @@ class MicroTest:
                 if self.args.fp16 and self.args.gpu:
                     input = input.half()
                     with torch.cuda.amp.autocast():
-                        out, Xup = self.get_model_result(self.args, input, self.model)
+                        out, Xup, out_seg = self.model_processer.get_model_result(input)
                 else:
-                    out, Xup = self.get_model_result(self.args, input, self.model)  # (Z, C, X, Y)
+                    # from utils.model_utils import get_ae_out
+                    # out, Xup, out_seg = get_ae_out(self.args, input, self.model)
+                    out, Xup, out_seg = self.model_processer.get_model_result(input)  # (Z, C, X, Y)
 
                 # augmentation back
                 out = self._test_time_augementation(out.unsqueeze(1), method=aug)
                 Xup = self._test_time_augementation(Xup.unsqueeze(1), method=aug)
-
                 # reshape back to 2d for input
                 out = out.squeeze()
                 Xup = Xup.squeeze()
 
                 out_aug.append(out)
+                if self.args.save_seg:
+                    out_seg = self._test_time_augementation(out_seg.unsqueeze(1), method=aug)
+                    out_seg = out_seg.squeeze()
+                    out_seg_aug.append(out_seg)
 
             out_aug = torch.stack(out_aug, 0)
             out = torch.mean(out_aug, 0)
-
             out_all.append(out.numpy())
 
-        out_all = np.stack(out_all, axis=3).mean(axis=3)
+            if self.args.save_seg:
+                out_seg_aug = torch.stack(out_seg_aug, 0)
+                out_seg_aug = torch.mean(out_seg_aug, 0)
+                out_seg_all.append(out_seg_aug.numpy())
 
-        return out_all, Xup.numpy()
+        out_all = np.stack(out_all, axis=3)
+        if self.args.save_seg:
+            out_seg_all = np.stack(out_seg_all, axis=3).mean(axis=3)
+            return out_all, Xup.numpy(), out_seg_all
 
-    def test_assemble(self):
+        return out_all, Xup.numpy(), ""
+
+    def test_assemble(self, x0, mode="full"):
         dz, dx, dy = self.kwargs['assemble_params']['dx_shape']
         zrange = range(*self.kwargs['assemble_params']['zrange'])
         xrange = range(*self.kwargs['assemble_params']['xrange'])
         yrange = range(*self.kwargs['assemble_params']['yrange'])
 
-        recreate_volume_folder(destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'), mc=self.kwargs['mc'])
-        self._test_over_volumne(x0, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
-                               destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
-                               input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:])
+        if mode == "full":
+            recreate_volume_folder(
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                mc=self.args.mc,
+                folder=["xy", "ori", "seg"])
+            self._test_over_volumne(x0, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
+                                   destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                                   input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:])
+        elif mode == "encode":
+            recreate_volume_folder(
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                folder=["recon", "ori", "hbranch"])
+            self._test_over_ae_enc_volumne(x0, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
+                                       destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'))
+        elif mode == "decode":
+            recreate_volume_folder(
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                folder=["seg", "xy"])
+            self._test_over_ae_dec_volumne(x0,
+                                           destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                                           input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:])
 
-    def save_images(self, outpath, img, axis=None):
+    def save_images(self, outpath, img, axis=None, norm_method=None, exp_trd=None, trd=None):
         """
         儲存影像的函數，接受完整的輸出路徑。
 
@@ -274,13 +396,101 @@ class MicroTest:
         if self.args.reverselog:
             img = reverse_log(img)
 
+        if norm_method:
+            img = self.normalization.backward_normalization(img, norm_method, exp_trd, trd)
+
         if axis is not None:
             img = np.transpose(img, axis)
 
         # 儲存影像
         tiff.imwrite(outpath, img)
+    
+    def test_ae_encode(self, x0):
+        assert self.model is not None, "model is None call get_model first to update model"
 
-    def assemble_microscopy_volumne(self, zrange, xrange, yrange, source):
+        scaler = torch.cuda.amp.GradScaler(enabled=self.args.fp16 and self.args.gpu)  # 初始化 scaler
+
+        d0 = self.kwargs['patch_range']['d0']
+        dx = self.kwargs['patch_range']['dx']
+        patch = [x[:, :, d0[0]:d0[0] + dx[0], d0[1]:d0[1] + dx[1], d0[2]:d0[2] + dx[2]] for x in x0]
+        patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
+
+        if self.args.fp16 and self.args.gpu:
+            patch = patch.half()
+            with torch.cuda.amp.autocast():
+                reconstructions, ori, hbranch = self.model_processer.get_ae_encode(patch)
+        else:
+            reconstructions, ori, hbranch = self.model_processer.get_ae_encode(patch)  # (Z, C, X, Y)
+
+        # reshape back to 2d for input
+        reconstructions = reconstructions.squeeze().numpy()
+
+        return reconstructions, ori.cpu().numpy(), hbranch.numpy() # (Z, X, Y), (Z, X, Y), (X, C, X, Y)
+
+    def test_ae_decode(self, hbranch_data, input_augmentation=[None]):
+        assert self.model is not None, "model is None; call get_model first to update model"
+
+        if self.args.gpu:
+            hbranch_data = hbranch_data.cuda()
+
+        # 將 MC 與 augmentation 的結果分別累計
+        mc_out = []
+        mc_seg = []
+
+        for m in range(self.args.mc):
+            aug_outs = []
+            aug_seg = []
+            for aug in input_augmentation:
+                input_aug = self._test_time_augementation(hbranch_data, method=aug)
+
+                if self.args.fp16 and self.args.gpu:
+                    input_aug = input_aug.half()
+                    with torch.cuda.amp.autocast():
+                        out, out_seg = self.model_processer.get_ae_decode(input_aug)
+                else:
+                    out, out_seg = self.model_processer.get_ae_decode(input_aug)
+
+                out = self._test_time_augementation(out.unsqueeze(1), method=aug)
+                out = out.squeeze()
+
+                aug_outs.append(out)
+                if self.args.save_seg:
+                    out_seg = self._test_time_augementation(out_seg.unsqueeze(1), method=aug)
+                    out_seg = out_seg.squeeze()
+                    aug_seg.append(out_seg)
+
+            aug_outs = torch.stack(aug_outs, 0)
+            out_mean = torch.mean(aug_outs, 0)
+            mc_out.append(out_mean.cpu().numpy())
+            if self.args.save_seg:
+                aug_seg = torch.stack(aug_seg, 0)
+                seg_mean = torch.mean(aug_seg, 0)
+                mc_seg.append(seg_mean.cpu().numpy())
+
+        mc_out = np.stack(mc_out, axis=3)
+
+        if self.args.save_seg:
+            mc_seg = np.stack(mc_seg, axis=3).mean(axis=3)
+        else:
+            mc_seg = ""
+        return mc_out, mc_seg
+
+    def show_or_save_assemble_microscopy(self, zrange, xrange, yrange, source, output_path="tmp.tif", show=True):
+        """
+        output_path == "" is to show only
+        __future__ :
+            show images
+        """
+        if self.args.assemble_method == "tiff":
+            assemble_func = self._assemble_microscopy_volume_memmap
+        elif self.args.assemble_method == "zarr":
+            assemble_func = self._assemble_microscopy_volume_zarr_parallel
+        else:
+            raise KeyError(f"Only support method tiff or zarr, but got {self.args.assemble_method}")
+        # Do assemble
+        assemble_func(zrange, xrange, yrange, source, output_path)
+
+    def __assemble_microscopy_volumne(self, zrange, xrange, yrange, source):
         """
         先把最後大小算出來，算完之後開個依樣大的final圖
         """
@@ -348,7 +558,7 @@ class MicroTest:
 
         tiff.imwrite(source[:-1] + '.tif', one_stack)
 
-    def assemble_microscopy_volume_memmap(self, zrange, xrange, yrange, source, output_path="tmp_xy.tif"):
+    def _assemble_microscopy_volume_memmap(self, zrange, xrange, yrange, source, output_path="tmp_xy.tif"):
         C0, C1, C2 = self.kwargs['assemble_params']['C']
         S0, S1, S2 = self.kwargs['assemble_params']['S']
 
@@ -358,15 +568,13 @@ class MicroTest:
         total_y = len(yrange) * (self.kwargs['assemble_params']['dx_shape'][2] - 2 * C2 - S2) + S2
 
         with tiff.TiffWriter(output_path, bigtiff=True) as tif:
-            empty_slice = np.zeros((total_x, total_y), dtype='float32')
+            empty_slice = np.zeros((total_x, total_y), dtype=self.save_image_datatype)
             for _ in range(total_z):
-                tif.write(empty_slice, contiguous=True, dtype='float32')
+                tif.write(empty_slice, contiguous=True, dtype=self.save_image_datatype)
 
-        volume = tiff.memmap(output_path, mode='r+', shape=(total_x, total_z, total_y), dtype='float32')
-        # volume = tiff.memmap(output_path, mode='r+', shape=(total_z, total_x, total_y), dtype='float32')
+        volume = tiff.memmap(output_path, mode='r+', shape=(total_x, total_z, total_y), dtype=self.save_image_datatype)
 
         # 創建一個內存映射的大數組
-        # volume = np.memmap(output_path, dtype='float32', mode='w+', shape=(total_z, total_x, total_y))
         posi_x, posi_y, posi_z = 0, 0, 0
 
         for nx, ix in enumerate(xrange):
@@ -384,6 +592,7 @@ class MicroTest:
                     # 加載並裁剪小圖塊
                     filename = os.path.join(source, f"{iz}_{ix}_{iy}.tif")
                     x = tiff.imread(filename)
+
                     stride_x, stride_y, stride_z = x.shape[1] - 2*C0 - S0, x.shape[2] - 2*C1 - S1, x.shape[0] - 2*C2 - S2
                     if C0 > 0:
                         cropped = x[C0:-C0, :, :]
@@ -397,7 +606,7 @@ class MicroTest:
                                               size=self.kwargs['assemble_params']['weight_shape'],
                                               edge_size=64)
                     cropped = np.multiply(cropped, w)
-                    cropped = cropped.transpose(1, 0, 2)
+                    cropped = cropped.transpose(1, 0, 2).astype(np.dtype(self.save_image_datatype))
 
                     volume[
                     posi_x:posi_x + cropped.shape[1],
@@ -410,7 +619,7 @@ class MicroTest:
         # 確保數據寫入磁盤
         del volume
 
-    def assemble_microscopy_volume_zarr_parallel(self, zrange, xrange, yrange, source,
+    def _assemble_microscopy_volume_zarr_parallel(self, zrange, xrange, yrange, source,
                                                  output_path="assembled_volume.zarr"):
         C0, C1, C2 = self.kwargs['assemble_params']['C']
         S0, S1, S2 = self.kwargs['assemble_params']['S']
@@ -427,13 +636,12 @@ class MicroTest:
         volume = root.create_dataset(
             'volume',
             shape=(total_z, total_x, total_y),
-            dtype='float32',
+            dtype=self.save_image_datatype,
             chunks=(256, 256, 256),  # 根據具體情況調整分塊大小
             compressor=zarr.Blosc(cname='zstd', clevel=3, shuffle=2)
         )
 
         # 預計算所有權重
-        print("預計算權重...")
         weights_cache = self._precompute_weights(zrange, xrange, yrange)
 
         # 定義處理 Patch 的函數
@@ -467,9 +675,8 @@ class MicroTest:
             start_x = x_idx * (dx_shape[1] - 2 * C1 - S1)
             start_y = y_idx * (dx_shape[2] - 2 * C2 - S2)
 
-            end_z = start_z + cropped.shape[0]
-            end_x = start_x + cropped.shape[1]
-            end_y = start_y + cropped.shape[2]
+            # cropped = self.normalization.backward_normalization(cropped, self.kwargs["norm_method"][0],
+            #                                                             self.kwargs['exp_trd'][0], self.kwargs['trd'][0])
 
             return (start_z, start_x, start_y, cropped)
 
@@ -501,8 +708,7 @@ class MicroTest:
             x = x.permute(0, 1, 3, 2)
             return x
 
-    def _test_over_volumne(self, x0, dx, dy, dz, zrange, xrange, yrange, destination,
-                          input_augmentation=[None]):
+    def _test_over_ae_enc_volumne(self, x0, dx, dy, dz, zrange, xrange, yrange, destination):
         # 初始化寫入隊列和寫入線程
         write_queue = queue.Queue(maxsize=100)  # 控制隊列大小以限制內存使用
         writer_thread = threading.Thread(target=writer_thread_func, args=(write_queue, destination, self.args))
@@ -517,16 +723,109 @@ class MicroTest:
                         self.kwargs['patch_range']['dx'] = [dz, dx, dy]
 
                         # 模型推理
-                        out_all, patch = test_model(x0, input_augmentation)
+                        reconstructions, ori, hbranch = self.test_ae_encode(x0)
 
-                        # 處理輸出
-                        out = out_all.mean(axis=3).astype(np.float32)
-                        if self.args.reverselog:
-                            out = reverse_log(out)
-                            patch = reverse_log(patch)
+                        reconstructions = self.normalization.backward_normalization(reconstructions,
+                                                                            self.kwargs["norm_method"][0],
+                                                                            self.kwargs['exp_trd'][0],
+                                                                            self.kwargs['trd'][0])
+                        ori = self.normalization.backward_normalization(ori,
+                                                                            self.kwargs["norm_method"][0],
+                                                                            self.kwargs['exp_trd'][0],
+                                                                            self.kwargs['trd'][0])
+
+                        # 將寫入任務加入隊列 "ae",
+                        write_queue.put(("encode", iz, ix, iy, reconstructions, ori, hbranch))
+        except Exception as e:
+            print(f"Error during processing: {e}")
+        finally:
+            # 所有任務完成後，發送終止信號
+            write_queue.put(None)
+            writer_thread.join()
+
+        # 確保所有寫入任務完成
+        write_queue.join()
+
+    def _test_over_ae_dec_volumne(self, x0, destination, input_augmentation=[None]):
+        # 初始化寫入隊列和寫入線程
+        write_queue = queue.Queue(maxsize=100)  # 控制隊列大小以限制內存使用
+        writer_thread = threading.Thread(target=writer_thread_func, args=(write_queue, destination, self.args))
+        writer_thread.start()
+
+        hbranch_iter = iter(x0)
+        try:
+            for _ in range(len(hbranch_iter)):
+                batch = next(hbranch_iter)
+    
+                hbranch_data, filename = batch
+                iz, ix, iy = filename[0].replace(".npy", "").split("/")[-1].split("_")
+                if not torch.is_tensor(hbranch_data):
+                    hbranch_data = torch.from_numpy(hbranch_data[0])
+                else:
+                    hbranch_data = hbranch_data[0]
+    
+                out_all, out_seg_all = self.test_ae_decode(hbranch_data, input_augmentation)
+                out_all_mean = self.normalization.backward_normalization(out_all.mean(axis=3),
+                                                                         self.kwargs["norm_method"][0],
+                                                                         self.kwargs['exp_trd'][0],
+                                                                         self.kwargs['trd'][0])
+                out_all_std = self.normalization.backward_normalization(out_all.std(axis=3),
+                                                                        self.kwargs["norm_method"][0],
+                                                                        self.kwargs['exp_trd'][0],
+                                                                        self.kwargs['trd'][0])
+                out_seg_all = self.normalization.backward_normalization(out_seg_all,
+                                                                        self.kwargs["norm_method"][0],
+                                                                        self.kwargs['exp_trd'][0],
+                                                                        [0, 255])
+                # 將寫入任務加入隊列
+                write_queue.put(("decode", iz, ix, iy, out_all_mean, out_all_std, out_seg_all))
+        except Exception as e:
+            print(f"Error during processing: {e}")
+        finally:
+            # 所有任務完成後，發送終止信號
+            write_queue.put(None)
+            writer_thread.join()
+
+        # 確保所有寫入任務完成
+        write_queue.join()
+
+    def _test_over_volumne(self, x0, dx, dy, dz, zrange, xrange, yrange, destination,
+                           input_augmentation=[None]):
+        # 初始化寫入隊列和寫入線程
+        write_queue = queue.Queue(maxsize=100)  # 控制隊列大小以限制內存使用
+        writer_thread = threading.Thread(target=writer_thread_func, args=(write_queue, destination, self.args))
+        writer_thread.start()
+
+        try:
+            for ix in xrange:
+                for iz in tqdm(zrange):
+                    for iy in yrange:
+                        # 設置 patch_range
+                        self.kwargs['patch_range']['d0'] = [iz, ix, iy]
+                        self.kwargs['patch_range']['dx'] = [dz, dx, dy]
+
+                        # 模型推理
+                        out_all, patch, out_seg_all = self.test_model(x0, input_augmentation)
+
+                        out_all_mean = self.normalization.backward_normalization(out_all.mean(axis=3),
+                                                                                 self.kwargs["norm_method"][0],
+                                                                                 self.kwargs['exp_trd'][0],
+                                                                                 self.kwargs['trd'][0])
+                        patch = self.normalization.backward_normalization(patch,
+                                                                          self.kwargs["norm_method"][0],
+                                                                          self.kwargs['exp_trd'][0],
+                                                                          self.kwargs['trd'][0])
+                        out_all_std = self.normalization.backward_normalization(out_all.std(axis=3),
+                                                                                self.kwargs["norm_method"][0],
+                                                                                self.kwargs['exp_trd'][0],
+                                                                                self.kwargs['trd'][0])
+                        out_seg_all = self.normalization.backward_normalization(out_seg_all,
+                                                                                self.kwargs["norm_method"][0],
+                                                                                self.kwargs['exp_trd'][0],
+                                                                                [0, 255])
 
                         # 將寫入任務加入隊列
-                        write_queue.put((iz, ix, iy, out, patch, out_all.std(axis=3)))
+                        write_queue.put(("full", iz, ix, iy, out_all_mean, patch, out_all_std, out_seg_all))
         except Exception as e:
             print(f"Error during processing: {e}")
         finally:
@@ -552,33 +851,6 @@ class MicroTest:
                     weights_cache[(iz, ix, iy)] = w
         return weights_cache
 
-    def _norm_x0(self, x0, norm_method, exp_trd, exp_ftr, trd):
-        if norm_method == 'exp':
-            x0[x0 <= exp_trd[0]] = exp_trd[0]
-            x0[x0 >= exp_trd[1]] = exp_trd[1]
-            x0 = np.log10(x0 + 1)
-            x0 = np.divide((x0 - x0.mean()), x0.std())
-            x0[x0 <= -exp_ftr] = -exp_ftr
-            x0[x0 >= exp_ftr] = exp_ftr
-            x0 = x0 / exp_ftr
-            x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
-        elif norm_method == '11':
-            x0[x0 <= trd[0]] = trd[0]
-            x0[x0 >= trd[1]] = trd[1]
-            # x0 = x0 / x0.max()
-            x0 = (x0 - x0.min()) / (x0.max() - x0.min())
-            x0 = (x0 - 0.5) * 2
-            x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
-        elif norm_method == '00':
-            x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
-        elif norm_method == '01':
-            print(trd[1])
-            x0[x0 >= trd[1]] = trd[1]
-            # x0 = x0 / x0.max()
-            x0 = (x0 - x0.min()) / (x0.max() - x0.min())
-            x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
-        return x0
-
     def _do_upsample(self, x0):
         assert self.upsample is not None, "upsample is None call get_model first to update upsample"
         return self.upsample(x0)
@@ -590,25 +862,43 @@ if __name__ == "__main__":
     tester.update_model()
 
     # Here you can register data
-    # x0 = tester.get_data()
+    x0 = tester.get_data()
 
-    # Here you can test model then save it
-    # out, patch = tester.test_model(x0, [None, 'transpose', 'flipX', 'flipY'])
-    # tester.save_images("tmp.tif", out, (1, 0, 2))
+    # 1. Here you can test model with single path image then save it
+    # out, patch, out_seg = tester.test_model(x0, [None, 'transpose', 'flipX', 'flipY'])
+    # tester.save_images("tmp.tif", out.mean(axis=3), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
+    #                     tester.kwargs['trd'][0], (1, 0, 2)) # norm_method, exp_trd, trd
+    # tester.save_images("out_seg.tif", out_seg, tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
+    #                         tester.kwargs['trd'][0], (1, 0, 2))
 
-    # Do test assemble then save patch
-    # tester.test_assemble()
+    # reconstructions, ori, hbranch = tester.test_ae_encode(x0)
 
-    # show or save assemble big image
+    # 2. Do test assemble then save patch
+    # test_assemble -> mode : encode, decode, full
+    tester.test_assemble(x0, mode="decode")
+
+    # 3. show or save assemble big image from pattch
     zrange = range(*tester.kwargs['assemble_params']['zrange'])
     xrange = range(*tester.kwargs['assemble_params']['xrange'])
     yrange = range(*tester.kwargs['assemble_params']['yrange'])
-    import time
-    start = time.time()
-    tester.assemble_microscopy_volume_zarr_parallel(zrange=zrange, xrange=xrange, yrange=yrange,
-                                source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/xy/'))
-    end = time.time()
-    print("cost : ", end - start)
+
+    tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/xy/'),
+                                            output_path="tmp_xy.tif"
+                                            )
+    tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/ori/'),
+                                            output_path="tmp_ori.tif"
+                                            )
+    tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/seg/'),
+                                            output_path="tmp_seg.tif"
+                                            )
 
 
-    # python test_combine_o.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --assemble
+
+    # python test_combine_o.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --assemble --assemble_method tiff
+    # python test_combine_o.py --prj /1dpm/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924 --save_seg
+    # CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1vmat/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924_operate_vmat --save_seg
+    # CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1vmat/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924_operate_dpm --save_seg
+    
