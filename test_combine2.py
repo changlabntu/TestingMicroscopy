@@ -46,7 +46,6 @@ def get_gan_out(x0, model):
 import time
 
 def get_ae_out(x0, model):
-    t0 = time.time()
     hbranchz = args.hbranchz
     if gpu:
         x0 = x0.cuda()
@@ -60,18 +59,23 @@ def get_ae_out(x0, model):
     hbranch = torch.cat(hb_all, dim=0).detach().cpu()
     del hb_all
 
-    t1 = time.time()
-
     if hbranchz:
         hbranch = model.decoder.conv_in(hbranch.cuda(0))
 
-    hbranch = hbranch.permute(1, 2, 3, 0).unsqueeze(0)
+    # (Z, C, X, Y)
+    hbranch = hbranch.permute(1, 2, 3, 0).unsqueeze(0)  # (1, C, X, Y, Z)
     if gpu:
         hbranch = hbranch.cuda()
-    XupX = model.net_g(hbranch, method='decode')['out0']  # (1, C, X, Y, Z)
 
-    t2 = time.time()
-    #print(t1-t0, t2-t1)
+    XupX_all = []
+    for aug in [None, 'transpose', 'flip2', 'flip3'][:]:
+        hbranchP = test_time_augementation(hbranch, method=aug)
+
+        XupX = model.net_g(hbranchP, method='decode')['out0']  # (1, C, X, Y, Z)
+
+        XupX = test_time_augementation(XupX, method=aug)
+        XupX_all.append(XupX)
+    XupX = torch.mean(torch.stack(XupX_all, 0), 0)
 
     Xup = torch.nn.Upsample(size=(256, 256, 256), mode='trilinear')(x0.permute(1, 2, 3, 0).unsqueeze(0))  # (1, C, X, Y, Z)
     Xup = Xup[0, :, ::].permute(3, 0, 1, 2).detach().cpu()#.numpy()  # (Z, C, X, Y))
@@ -459,7 +463,7 @@ if __name__ == '__main__':
                         kwargs['exp_trd'][i], kwargs['exp_ftr'][i], kwargs['trd'][i])
 
     # single test
-    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][:], **kwargs)
+    out, patch = test_model(x0, model, input_augmentation=[None, 'transpose', 'flip2', 'flip3'][:1], **kwargs)
     var = ((out > -0.16) / 1).std(axis=-1)
     #var = out.std(axis=-1)
     out = out.mean(axis=-1)

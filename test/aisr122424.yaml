@@ -1,0 +1,26 @@
+SOURCE: '/media/ExtHDD01/'
+Default:
+  dataset: "aisr122424"
+  upsample_params:
+    size: [256, 256, 256]
+  patch_range:
+    d0: [47, 100, 100]
+    dx: [64, 256, 256]
+  root_path: "/media/ghc/Ghc_data3/BRC/aisr/aisr122424/"
+  image_path: ["roi0A.tif"]
+  norm_method: ["11"]
+  trd: [[0, 15000]]
+  exp_trd: [None]
+  exp_ftr: [None]
+  assemble_params:
+    C: [ 32, 32, 32 ] # cropped pixels
+    S: [ 64, 64, 64 ] # overlapping pixels
+    dx_shape: [ 64, 256, 256 ] # (dz, dx, dy) inference size # upsample size (60, 128, 384) > (384, 128, 384)
+    weight_shape: [ 192, 192, 192 ] # shape of the weight = dx_shape - cropping
+    weight_method: "cross"
+    zrange: [ 0, 256, 32 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy), coordinates after upsampling
+    xrange: [ 0, 769, 128 ] # 357
+    yrange: [ 0, 256, 128 ]
+  mc: 10
+
+# CUDA_VISIBLE_DEVICES=1 python test_combine.py  --prj /IsoScopeXY/0 --epoch 7700 --model_type GAN --gpu --config aisr122424 --assemble --testvolume

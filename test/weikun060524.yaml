@@ -1,0 +1,23 @@
+SOURCE: '/media/ExtHDD01/'
+Default:
+  dataset: "weikun060524"
+  uprate: 8
+  upsample_params:
+    size: [256, 256, 256]
+  patch_range:
+    d0: [96, 1024, 1024]
+    dx: [32, 256, 256]
+  image_path: ["/media/ExtHDD01/Dataset/paired_images/weikun060524/roiAx2.tif"]
+  norm_method: ["11"]
+  trd: [[200, 5000]]
+  exp_trd: [None]
+  exp_ftr: [None]
+  assemble_params:
+    C: [ 32, 32, 32 ] # cropped pixels
+    S: [ 64, 64, 64 ] # overlapping pixels
+    dx_shape: [ 32, 256, 256 ] # (dz, dx, dy) inference size # upsample size (60, 128, 384) > (384, 128, 384)
+    weight_shape: [ 192, 192, 192 ] # shape of the weight = dx_shape - cropping
+    weight_method: "cross"
+    zrange: [ 32, 128, 16 ] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy), coordinates after upsampling
+    xrange: [ 1024, 1153, 128 ]
+    yrange: [ 256, 1025, 128 ]
