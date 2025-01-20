@@ -10,6 +10,11 @@
     - can't take two outputs - out0 and out1 properly
     - need to fix exponential normalization (norm_method = exp w/ exp_trd and exp_ftr)
     - need the ability to take stacks of 2D tif as input (now only 3D tif)
+
+## [0.1.3] - 2025-01-20
+    - Optimize decoder to cpu too slow issue by using async transfer,save up to 50% of time.
+    - Fix uint16 brightness issue
+
 ## [0.1.2] - 2025-01-14
     - Refactor code OOR principle
     - Can take stacks of 2D tif as input

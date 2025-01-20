@@ -6,17 +6,28 @@
 ## Pipeline 
 <details>
 <summary><code><b> click here </b></code></summary>
-### Initial tester object    
-    tester = MicroTest()
-### Register data
-    x0 = tester.get_data()
-### Register model
-    tester.update_model()
-### Testing
-    1. Test single image
-    2. Tesing multiple patch
-    3. Assemble patch to large image
-More details in function ****"get_data"****
+
+    -  Initial tester object    
+        tester = MicroTest()
+    -  Register data
+        x0 = tester.get_data()
+    -  Register model
+        tester.update_model()
+    -  Testing
+        1. Test single image
+        2. Tesing multiple patch
+        3. Assemble patch to large image
+
+</details>
+
+## Arguments flag
+<details>
+<summary><code><b> click here </b></code></summary>
+
+    --fp16: use float point 16 inference model 
+    --assemble_method: compose image method, can use tiff or zarr
+    --save: which images you want to save, ex: ori seg
+    --image_datatype: saved image datatype, support float32, uint16, uint8
 </details>
 
 ## Support data types
@@ -52,7 +63,14 @@ More details in function ****"get_data"****
     - Assemble patch to large images
     Ex : tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
                                             source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/xy/'),
-                                            output_path="tmp_xy.tif"
+                                            output_path="xy_slice_folder"
                                             )
-        - result saved in output_path
+        - Note that: if using tiff method, output_path should br a folder
+</details>
+
+## Example usage
+<details>
+<summary><code><b> click here </b></code></summary>
+    
+    CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1dpm/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924 --save ori seg
 </details>

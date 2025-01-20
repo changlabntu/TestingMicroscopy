@@ -116,7 +116,8 @@ class DataNormalization:
         elif norm_method == '11':
             x0[x0 <= -1] = -1
             x0[x0 >= 1] = 1
-            x0 = (x0 - x0.min()) / (x0.max() - x0.min() + 1e-7)
+            x0 = (x0 + 1) /2
+            # x0 = (x0 - x0.min()) / (x0.max() - x0.min() + 1e-7)
             return x0
         elif norm_method == '00':
             return x0
