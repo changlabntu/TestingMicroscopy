@@ -89,11 +89,16 @@ def recreate_volume_folder(destination, mc=1, folder=["xy", "ori", "seg"]):
         shutil.rmtree(os.path.join(destination, 'recon'))
     if os.path.exists(os.path.join(destination, 'hbranch')) and "hbranch" in folder:
         shutil.rmtree(os.path.join(destination, 'hbranch'))
-    os.makedirs(os.path.join(destination, 'xy'), exist_ok=True)
-    os.makedirs(os.path.join(destination, 'ori'), exist_ok=True)
-    os.makedirs(os.path.join(destination, 'seg'), exist_ok=True)
-    os.makedirs(os.path.join(destination, 'recon'), exist_ok=True)
-    os.makedirs(os.path.join(destination, 'hbranch'), exist_ok=True)
+    if "xy" in folder:
+        os.makedirs(os.path.join(destination, 'xy'), exist_ok=True)
+    if "ori" in folder:
+        os.makedirs(os.path.join(destination, 'ori'), exist_ok=True)
+    if "seg" in folder:
+        os.makedirs(os.path.join(destination, 'seg'), exist_ok=True)
+    if "recon" in folder:
+        os.makedirs(os.path.join(destination, 'recon'), exist_ok=True)
+    if "hbranch" in folder:
+        os.makedirs(os.path.join(destination, 'hbranch'), exist_ok=True)
     if mc > 1:
         if os.path.exists(os.path.join(destination, 'xyvar')):
             shutil.rmtree(os.path.join(destination, 'xyvar'))
@@ -111,8 +116,8 @@ def writer_thread_func(write_queue, destination, args):
             if mode == "decode":
                 # 從 test_model 來的結果
                 _, iz, ix, iy, out_all_mean, out_all_std, out_seg_all = item
-                if args.reverselog:
-                    out_all_mean = reverse_log(out_all_mean)
+                # if args.reverselog:
+                #     out_all_mean = reverse_log(out_all_mean)
                 if "xy" in args.save:
                     tiff.imwrite(os.path.join(destination, "xy", f"{iz}_{ix}_{iy}.tif"), out_all_mean)
                 if "seg" in args.save:
@@ -123,9 +128,9 @@ def writer_thread_func(write_queue, destination, args):
                 # 從 test_model 來的結果
                 _, iz, ix, iy, out_all_mean, patch, out_all_std, out_seg_all = item
 
-                if args.reverselog:
-                    out_all_mean = reverse_log(out_all_mean)
-                    patch = reverse_log(patch)
+                # if args.reverselog:
+                #     out_all_mean = reverse_log(out_all_mean)
+                #     patch = reverse_log(patch)
 
                 # 依據模式將檔案寫入指定子資料夾
                 if "xy" in args.save:
@@ -141,9 +146,9 @@ def writer_thread_func(write_queue, destination, args):
                 # 從 test_ae_encode 來的結果
                 _, iz, ix, iy, reconstructions, ori, hbranch = item
 
-                if args.reverselog:
-                    reconstructions = reverse_log(reconstructions)
-                    ori = reverse_log(ori)
+                # if args.reverselog:
+                #     reconstructions = reverse_log(reconstructions)
+                #     ori = reverse_log(ori)
                 if "recon" in args.save:
                     tiff.imwrite(os.path.join(destination, "recon", f"{iz}_{ix}_{iy}.tif"), reconstructions)
                 if "ori" in args.save:
@@ -397,8 +402,8 @@ class MicroTest:
             os.makedirs(directory, exist_ok=True)
 
         # 處理影像
-        if self.args.reverselog:
-            img = reverse_log(img)
+        # if self.args.reverselog:
+        #     img = reverse_log(img)
 
         if norm_method:
             img = self.normalization.backward_normalization(img, norm_method, exp_trd, trd)
@@ -486,6 +491,7 @@ class MicroTest:
             show images
         """
         if self.args.assemble_method == "tiff":
+            # assemble_func = self.__assemble_microscopy_volumne
             # assemble_func = self._assemble_microscopy_volume_memmap
             assemble_func = self.assemble_microscopy_volumne
         elif self.args.assemble_method == "zarr":
@@ -495,7 +501,7 @@ class MicroTest:
         # Do assemble
         assemble_func(zrange, xrange, yrange, source, output_path)
 
-    def __assemble_microscopy_volumne(self, zrange, xrange, yrange, source):
+    def __assemble_microscopy_volumne(self, zrange, xrange, yrange, source, output_path):
         """
         先把最後大小算出來，算完之後開個依樣大的final圖
         """
@@ -870,10 +876,10 @@ class MicroTest:
                                                                         self.kwargs["norm_method"][0],
                                                                         self.kwargs['exp_trd'][0],
                                                                         self.kwargs['trd'][0])
-                out_seg_all = self.normalization.backward_normalization(out_seg_all,
-                                                                        self.kwargs["norm_method"][0],
-                                                                        self.kwargs['exp_trd'][0],
-                                                                        [0, 255])
+                # out_seg_all = self.normalization.backward_normalization(out_seg_all,
+                #                                                         self.kwargs["norm_method"][0],
+                #                                                         self.kwargs['exp_trd'][0],
+                #                                                         [0, 255])
                 # 將寫入任務加入隊列
                 write_queue.put(("decode", iz, ix, iy, out_all_mean, out_all_std, out_seg_all))
         except Exception as e:
@@ -917,10 +923,10 @@ class MicroTest:
                                                                                 self.kwargs["norm_method"][0],
                                                                                 self.kwargs['exp_trd'][0],
                                                                                 self.kwargs['trd'][0])
-                        out_seg_all = self.normalization.backward_normalization(out_seg_all,
-                                                                                self.kwargs["norm_method"][0],
-                                                                                self.kwargs['exp_trd'][0],
-                                                                                [0, 255])
+                        # out_seg_all = self.normalization.backward_normalization(out_seg_all,
+                        #                                                         self.kwargs["norm_method"][0],
+                        #                                                         self.kwargs['exp_trd'][0],
+                        #                                                         [0, 255])
 
                         # 將寫入任務加入隊列
                         write_queue.put(("full", iz, ix, iy, out_all_mean, patch, out_all_std, out_seg_all))
@@ -965,10 +971,11 @@ if __name__ == "__main__":
 
     # 1. Here you can test model with single path image then save it
     # out, patch, out_seg = tester.test_model(x0, [None, 'transpose', 'flipX', 'flipY'])
-    # tester.save_images("tmp.tif", out.mean(axis=3), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
-    #                     tester.kwargs['trd'][0], (1, 0, 2)) # norm_method, exp_trd, trd
-    # tester.save_images("out_seg.tif", out_seg, tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
-    #                         tester.kwargs['trd'][0], (1, 0, 2))
+    # tester.save_images("out.tif", out.mean(axis=3), (1, 0, 2), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
+    #                     tester.kwargs['trd'][0]) # norm_method, exp_trd, trd
+    # tester.save_images("out_seg.tif", out_seg, (1, 0, 2))
+    # tester.save_images("patch.tif", patch, (1, 0, 2), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
+    #                         tester.kwargs['trd'][0])
 
     # reconstructions, ori, hbranch = tester.test_ae_encode(x0)
 
@@ -1008,5 +1015,6 @@ if __name__ == "__main__":
     # python test_combine_o.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --assemble --assemble_method tiff
     # python test_combine_o.py --prj /1dpm/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924 --save_seg
     # CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1vmat/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924_operate_vmat --save_seg
-    # CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1dpm/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924 --save ori seg
-    
+    # CUDA_VISIBLE_DEVICES=3 python test_combine_o.py --prj /1dpm/ --epoch 1100 --model_type AE --gpu --hbranchz --assemble --assemble_method tiff --config config_122924 --save ori seg xy
+    # python test_combine_o.py  --prj /ae/cut/1/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --save ori seg xy
+    # python test_combine_o.py  --prj /1dpm/ --epoch 800 --model_type AE --gpu --hbranchz --reverselog --save ori seg xy --config config_122924

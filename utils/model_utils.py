@@ -163,10 +163,12 @@ class ModelProcesser:
             reconstructions_all.append(reconstructions)
 
         hbranch = torch.cat(hb_all, dim=0)
+
         # print("hbranch : ", hbranch.shape)
         reconstructions_all = torch.cat(reconstructions_all, dim=0).detach().to('cpu', non_blocking=True)
         Xup = torch.nn.Upsample(size=(self.upsample_size[0]*8, self.upsample_size[1], self.upsample_size[2]), mode='trilinear')(
             x0.permute(1, 2, 3, 0).unsqueeze(0))  # (1, C, X, Y, Z)
+
         Xup = Xup[0, 0, ::].permute(2, 0, 1).detach().to('cpu', non_blocking=True)  # .numpy()  # (Z, X, Y))
         del hb_all
         return reconstructions_all, Xup, hbranch
@@ -176,11 +178,13 @@ class ModelProcesser:
             hbranch = self.model.decoder.conv_in(hbranch.cuda(0))
         hbranch = hbranch.permute(1, 2, 3, 0).unsqueeze(0)  # (C, X, Y, Z)
         # print("hbranch d : ", hbranch.shape)
+
         if self.gpu:
             hbranch = hbranch.cuda()
-            
         out = self.model.net_g(hbranch, method='decode')
-        Xout = out['out0'].detach().to('cpu', non_blocking=True)  # (1, C, X, Y, Z)
+        # print("no non blocking ", out['out0'].shape, out['out0'].max(), out['out0'].min(), out['out0'].mean())
+        torch.cuda.synchronize()
+        Xout = out['out0'].detach().to('cpu')  # (1, C, X, Y, Z) # , non_blocking=True
         XupX = Xout[0, 0, ::].permute(2, 0, 1)  # .numpy()
 
         if "seg" in self.args.save:
