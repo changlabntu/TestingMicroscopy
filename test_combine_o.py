@@ -132,7 +132,6 @@ def writer_thread_func(write_queue, destination, args):
                 #     out_all_mean = reverse_log(out_all_mean)
                 #     patch = reverse_log(patch)
 
-                # 依據模式將檔案寫入指定子資料夾
                 if "xy" in args.save:
                     tiff.imwrite(os.path.join(destination, "xy", f"{iz}_{ix}_{iy}.tif"), out_all_mean)
                 if "ori" in args.save:
@@ -197,6 +196,8 @@ class MicroTest:
         parser.add_argument('--assemble_method', type=str, default='tiff', help='tiff or zarr method while assemble images')
         parser.add_argument('--save', nargs='+', choices=['ori', 'recon', 'xy', 'seg'], required=False, help="assign image to save: --save ori recon")
         parser.add_argument('--image_datatype', type=str, default="float32")
+        parser.add_argument('--augmentation', type=str, default="encode")
+        parser.add_argument('--roi', type=str, default='roiA')
 
         return parser.parse_args()
 
@@ -301,6 +302,7 @@ class MicroTest:
 
         else:
             raise ValueError("No valid image path provided.")
+
         return x0
 
     def test_model(self, x0, input_augmentation=[None]):
@@ -312,46 +314,20 @@ class MicroTest:
         for m in range(self.args.mc):
             d0 = self.kwargs['patch_range']['d0']
             dx = self.kwargs['patch_range']['dx']
+
             patch = [x[:, :, d0[0]:d0[0] + dx[0], d0[1]:d0[1] + dx[1], d0[2]:d0[2] + dx[2]] for x in x0]
-            patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1).pin_memory()  # (Z, C, X, Y)
+            patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
-            out_aug = []
-            out_seg_aug = []
-            for i, aug in enumerate(input_augmentation):  # (Z, C, X, Y)
-                # augmentation
-                input = self._test_time_augementation(patch, method=aug)
+            if self.args.fp16 and self.args.gpu:
+                input = patch.half()
+                with torch.cuda.amp.autocast():
+                    out, Xup, out_seg = self.model_processer.get_model_result(input, input_augmentation)
+            else:
+                out, Xup, out_seg = self.model_processer.get_model_result(patch, input_augmentation)
 
-                # here is the forward
-                if self.args.fp16 and self.args.gpu:
-                    input = input.half()
-                    with torch.cuda.amp.autocast():
-                        out, Xup, out_seg = self.model_processer.get_model_result(input)
-                else:
-                    # from utils.model_utils import get_ae_out
-                    # out, Xup, out_seg = get_ae_out(self.args, input, self.model)
-                    out, Xup, out_seg = self.model_processer.get_model_result(input)  # (Z, C, X, Y)
-
-                # augmentation back
-                out = self._test_time_augementation(out.unsqueeze(1), method=aug)
-                Xup = self._test_time_augementation(Xup.unsqueeze(1), method=aug)
-                # reshape back to 2d for input
-                out = out.squeeze()
-                Xup = Xup.squeeze()
-
-                out_aug.append(out)
-                if "seg" in self.args.save:
-                    out_seg = self._test_time_augementation(out_seg.unsqueeze(1), method=aug)
-                    out_seg = out_seg.squeeze()
-                    out_seg_aug.append(out_seg)
-
-            out_aug = torch.stack(out_aug, 0)
-            out = torch.mean(out_aug, 0)
             out_all.append(out.numpy())
-
             if "seg" in self.args.save:
-                out_seg_aug = torch.stack(out_seg_aug, 0)
-                out_seg_aug = torch.mean(out_seg_aug, 0)
-                out_seg_all.append(out_seg_aug.numpy())
+                out_seg_all.append(out_seg.numpy())
 
         out_all = np.stack(out_all, axis=3)
         if "seg" in self.args.save:
@@ -360,7 +336,7 @@ class MicroTest:
 
         return out_all, Xup.numpy(), ""
 
-    def test_assemble(self, x0, mode="full"):
+    def test_assemble(self, x0, mode="full", input_augmentation=[None, 'transpose', 'flipX', 'flipY']):
         dz, dx, dy = self.kwargs['assemble_params']['dx_shape']
         zrange = range(*self.kwargs['assemble_params']['zrange'])
         xrange = range(*self.kwargs['assemble_params']['xrange'])
@@ -368,25 +344,25 @@ class MicroTest:
 
         if mode == "full":
             recreate_volume_folder(
-                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi),
                 mc=self.args.mc,
                 folder=["xy", "ori", "seg"])
             self._test_over_volumne(x0, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
-                                   destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
-                                   input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:])
+                                   destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi),
+                                   input_augmentation=input_augmentation)
         elif mode == "encode":
             recreate_volume_folder(
-                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi),
                 folder=["recon", "ori", "hbranch"])
             self._test_over_ae_enc_volumne(x0, dx, dy, dz, zrange=zrange, xrange=xrange, yrange=yrange,
-                                       destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'))
+                                       destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi))
         elif mode == "decode":
             recreate_volume_folder(
-                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
+                destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi),
                 folder=["seg", "xy"])
             self._test_over_ae_dec_volumne(x0,
-                                           destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], 'cycout'),
-                                           input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:])
+                                           destination=os.path.join(self.config['DESTINATION'], self.kwargs["dataset"], self.args.roi),
+                                           input_augmentation=input_augmentation)
 
     def save_images(self, outpath, img, axis=None, norm_method=None, exp_trd=None, trd=None):
         """
@@ -422,7 +398,7 @@ class MicroTest:
         d0 = self.kwargs['patch_range']['d0']
         dx = self.kwargs['patch_range']['dx']
         patch = [x[:, :, d0[0]:d0[0] + dx[0], d0[1]:d0[1] + dx[1], d0[2]:d0[2] + dx[2]] for x in x0]
-        patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1).pin_memory()  # (Z, C, X, Y)
+        patch = torch.cat([self._do_upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
         if self.args.fp16 and self.args.gpu:
             patch = patch.half()
@@ -434,7 +410,7 @@ class MicroTest:
         # reshape back to 2d for input
         reconstructions = reconstructions.squeeze().numpy()
 
-        return reconstructions, ori.numpy(), hbranch.detach().to('cpu', non_blocking=True).numpy() # (Z, X, Y), (Z, X, Y), (X, C, X, Y)
+        return reconstructions, ori.numpy(), hbranch.detach().to('cpu').numpy() # (Z, X, Y), (Z, X, Y), (X, C, X, Y)
 
     def test_ae_decode(self, hbranch_data, input_augmentation=[None]):
         assert self.model is not None, "model is None; call get_model first to update model"
@@ -442,7 +418,6 @@ class MicroTest:
         if self.args.gpu:
             hbranch_data = hbranch_data.cuda()
 
-        # 將 MC 與 augmentation 的結果分別累計
         mc_out = []
         mc_seg = []
 
@@ -450,22 +425,22 @@ class MicroTest:
             aug_outs = []
             aug_seg = []
             for aug in input_augmentation:
-                input_aug = self._test_time_augementation(hbranch_data, method=aug)
+                input_aug = hbranch_data * 1
 
                 if self.args.fp16 and self.args.gpu:
                     input_aug = input_aug.half()
                     with torch.cuda.amp.autocast():
-                        out, out_seg = self.model_processer.get_ae_decode(input_aug)
+                        out, out_seg = self.model_processer.get_ae_decode(input_aug, aug)
                 else:
-                    out, out_seg = self.model_processer.get_ae_decode(input_aug)
+                    out, out_seg = self.model_processer.get_ae_decode(input_aug, aug)
 
-                out = self._test_time_augementation(out.unsqueeze(1), method=aug)
-                out = out.squeeze()
+                ## out = self._test_time_augementation(out.unsqueeze(1), method=aug)
+                ## out = out.squeeze()
 
                 aug_outs.append(out)
                 if "seg" in self.args.save:
-                    out_seg = self._test_time_augementation(out_seg.unsqueeze(1), method=aug)
-                    out_seg = out_seg.squeeze()
+                    ## out_seg = self._test_time_augementation(out_seg.unsqueeze(1), method=aug)
+                    ## out_seg = out_seg.squeeze()
                     aug_seg.append(out_seg)
 
             aug_outs = torch.stack(aug_outs, 0)
@@ -965,47 +940,45 @@ if __name__ == "__main__":
     tester = MicroTest()
     # Update model and upsample
     tester.update_model()
-
     # Here you can register data
     x0 = tester.get_data()
 
     # 1. Here you can test model with single path image then save it
     # out, patch, out_seg = tester.test_model(x0, [None, 'transpose', 'flipX', 'flipY'])
-    # tester.save_images("out.tif", out.mean(axis=3), (1, 0, 2), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
-    #                     tester.kwargs['trd'][0]) # norm_method, exp_trd, trd
-    # tester.save_images("out_seg.tif", out_seg, (1, 0, 2))
-    # tester.save_images("patch.tif", patch, (1, 0, 2), tester.kwargs["norm_method"][0], tester.kwargs['exp_trd'][0],
-    #                         tester.kwargs['trd'][0])
+    #
+    # tester.save_images("out.tif", out.mean(axis=3), (1, 0, 2), norm_method=tester.kwargs["norm_method"][0], exp_trd=tester.kwargs['exp_trd'][0],
+    #                     trd=tester.kwargs['trd'][0]) # norm_method, exp_trd, trd
+    # tester.save_images("out_seg.tif", out_seg, (1, 0, 2), norm_method="11", trd=[0, 255])
+    # tester.save_images("patch.tif", patch, (1, 0, 2), norm_method=tester.kwargs["norm_method"][0], exp_trd=tester.kwargs['exp_trd'][0],
+    #                         trd=tester.kwargs['trd'][0])
 
     # reconstructions, ori, hbranch = tester.test_ae_encode(x0)
 
     # 2. Do test assemble then save patch
     # test_assemble -> mode : encode, decode, full
 
-    # t1 = time.time()
-    tester.test_assemble(x0, mode="full")
+    tester.test_assemble(x0, mode="full", input_augmentation=[None, 'transpose', 'flipX', 'flipY']) #
 
-    # print("test assemble time : ", t2-t1)
     # 3. show or save assemble big image from pattch
     zrange = range(*tester.kwargs['assemble_params']['zrange'])
     xrange = range(*tester.kwargs['assemble_params']['xrange'])
     yrange = range(*tester.kwargs['assemble_params']['yrange'])
 
     tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
-                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/xy/'),
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'xy/'),
                                             # output_path="tmp_xy.tif",
-                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/xy_assemble')#
+                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'xy_assemble')#
                                             )
 
     tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
-                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/ori/'),
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'ori/'),
                                             # output_path="tmp_ori.tif",
-                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/ori_assemble')
+                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'ori_assemble')
                                             )
 
     tester.show_or_save_assemble_microscopy(zrange=zrange, xrange=xrange, yrange=yrange,
-                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/seg/'),
-                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], 'cycout/seg_assemble')
+                                            source=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'seg/'),
+                                            output_path=os.path.join(tester.config['DESTINATION'], tester.kwargs["dataset"], tester.args.roi, 'seg_assemble')
                                             )
     # t5 = time.time()
     # print("img3 : ", t5-t4)

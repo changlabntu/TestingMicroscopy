@@ -3,6 +3,20 @@
 ## Easy startup
     pip install requirements.txt
 
+## Experiment
+<div align="center">
+
+| **Experiment** | **augmentation** | **inference datatype** | **saved datatype** | **cost time per 32x256x256 patch** |                  **enhanced img**                  |                    **enhanced seg**                    |
+|:--------------:|:----------------:|:----------------------:|:------------------:|:----------------------------------:|:--------------------------------------------------:|:------------------------------------------------------:|
+|       A        |  enconde+decode  |          fp32          |        fp32        |              4.084 s               | <img width="80%" src="sample/enc_fp32_save32.png"> | <img width="80%" src="sample/seg_enc_fp32_save32.png"> |
+|       B        |      decode      |          fp32          |        fp32        |               3.18 s               | <img width="80%" src="sample/dec_fp32_save32.png"> | <img width="80%" src="sample/seg_dec_fp32_save32.png"> |
+|       C        |  encode+decode   |          fp16          |        fp32        |              3.146 s               | <img width="80%" src="sample/enc_fp16_save32.png"> | <img width="80%" src="sample/seg_enc_fp16_save32.png"> |
+|       D        |      decode      |          fp16          |        fp32        |               2.43 s               |                                                    |                                                        |
+|       E        |  enconde+decode  |          fp32          |       uint16       |              4.084 s               | <img width="80%" src="sample/enc_fp32_save16.png"> | <img width="80%" src="sample/seg_enc_fp32_save16.png"> |
+|       F        |  enconde+decode  |          fp32          |       uint8        |              4.084 s               | <img width="80%" src="sample/enc_fp32_save8.png">  | <img width="80%" src="sample/seg_enc_fp32_save8.png">  |
+</div>
+
+
 ## Pipeline 
 <details>
 <summary><code><b> click here </b></code></summary>
@@ -26,8 +40,10 @@
 
     --fp16: use float point 16 inference model 
     --assemble_method: compose image method, can use tiff or zarr
-    --save: which images you want to save, ex: ori seg
+    --save: which images you want to save, ex: ori seg, can use ori seg recon xy
     --image_datatype: saved image datatype, support float32, uint16, uint8
+    --augmentation: do augmentation while encode or decode, will be more faster if do --augmentation decode
+    --roi: assigned subfolder naming, ex: roiA
 </details>
 
 ## Support data types
