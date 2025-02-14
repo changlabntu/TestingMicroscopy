@@ -1,4 +1,5 @@
 SOURCE: '/media/ExtHDD01/'
+DESTINATION: '/media/ExtHDD01/'
 Default:
   dataset: "chu123024"
   upsample_params: # upsample size, same with dx if no upsample
@@ -8,8 +9,8 @@ Default:
     d0: [100, 1200, 800]
     dx: [32, 256, 256]
   root_path: "/media/ghc/Ghc_data3/Chu_full_brain/enhance_test/"
-  #image_path: ["ROI/DPM/roiA_DPM.tif", "ROI/DPMM/roiA_DPMM.tif"]
-  image_path: ["ROI/VMAT/roiA_VMAT.tif", "ROI/VMATM/roiA_VMATM.tif"]
+  image_path: ["ROI/DPM/roiA_DPM.tif", "ROI/DPMM/roiA_DPMM.tif"]
+  #image_path: ["ROI/VMAT/roiA_VMAT.tif", "ROI/VMATM/roiA_VMATM.tif"]
   norm_method: ["11", "11"]  # normalization method for each data in the list
   exp_trd: [None, None] # these are parameters for exponential normalization
   exp_ftr: [None, None] # these are parameters for exponential normalization

@@ -76,6 +76,8 @@ def get_ae_out(args, x0, model):
     if hbranchz:
         hbranch = model.decoder.conv_in(hbranch.cuda(0))
 
+    print(hbranch.shape)
+
     hbranch = hbranch.permute(1, 2, 3, 0).unsqueeze(0)
     if gpu:
         hbranch = hbranch.cuda()
@@ -116,7 +118,6 @@ def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", ar
 
         patch = torch.cat([upsample(x).squeeze().unsqueeze(1) for x in patch], 1)  # (Z, C, X, Y)
 
-        #out_aug = []
         for i, aug in enumerate(input_augmentation):  # (Z, C, X, Y)
             # augmentation
             input = test_time_augementation(patch, method=aug)
@@ -136,21 +137,14 @@ def test_model(x0, model, upsample, input_augmentation=None, model_type="AE", ar
                     out, Xup = get_ae_out(args, input, model)   # (Z, C, X, Y)
 
             # augmentation back
-            out = test_time_augementation(out.unsqueeze(1), method=aug)
-            Xup = test_time_augementation(Xup.unsqueeze(1), method=aug)
+            out = test_time_augementation(out, method=aug)
+            Xup = test_time_augementation(Xup, method=aug)
 
             # reshape back to 2d for input
             out = out.squeeze()
             Xup = Xup.squeeze()
 
-            out_aug.append(out)
-
             out_all.append(out.numpy())
-
-            #out_aug.append(out)
-
-        #out_aug = torch.stack(out_aug, 0)
-        #out = torch.mean(out_aug, 0)
 
         out_all.append(out.numpy())
 
@@ -447,8 +441,10 @@ def get_args(option, config_name):
 
 
 def get_data(kwargs):
-    image_path = [x for x in kwargs.get("image_path", [])]  # if image path is a file
+    image_path = [kwargs.get("root_path") + x for x in kwargs.get("image_path", [])]  # if image path is a file
     image_list_path = kwargs.get("image_list_path")  # if image path is a directory
+
+    print(image_path)
 
     x0 = []
     if image_path:
@@ -548,8 +544,6 @@ def test_entry_point():
     # path_source = config['SOURCE']
     destination = config['DESTINATION'] + kwargs["dataset"]
 
-    # model
-    model, upsample = get_model(kwargs['dataset'], args.prj, args.epoch, args.model_type, gpu)
     # get model
     model, upsample = get_model(kwargs, args.prj, args.epoch, args.model_type, args.gpu, config['SOURCE'], fp16=args.fp16)
 
@@ -560,9 +554,9 @@ def test_entry_point():
                         kwargs['exp_trd'][i], kwargs['exp_ftr'][i], kwargs['trd'][i])
 
     # single test
-    out, patch = test_model(x0, model, upsample, input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:],
+    out, patch = test_model(x0, model, upsample, input_augmentation=[None, 'transpose', 'flipX', 'flipY'][:1],
                             model_type=args.model_type, args=args, **kwargs)
-    out = out.mean(axis=3)
+    out = out.mean(axis=-1)
 
     # save single outputQ
     if args.reverselog:
@@ -570,8 +564,12 @@ def test_entry_point():
         patch = reverse_log(patch)
 
     os.makedirs(destination, exist_ok=True)
-    tiff.imwrite(destination + '/xy.tif', np.transpose(out, (1, 0, 2)))
-    tiff.imwrite(destination + '/patch.tif', np.transpose(patch, (1, 0, 2)))
+
+    print(out.shape)
+    print(patch.shape)
+
+    tiff.imwrite(destination + '/xy.tif', np.transpose(out, (0, 2, 1, 3)))
+    tiff.imwrite(destination + '/patch.tif', np.transpose(patch, (0, 2, 1, 3)))
 
     # assembly test
 
