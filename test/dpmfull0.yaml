@@ -1,0 +1,55 @@
+#/Operant_LTM_24hr/Operant_LTM_24hr_VMAT_1/Operant_24hr_LTM_VMAT_1_R/"
+DEFAULT:
+  SOURCE: '/media/ExtHDD01/'
+  root_path: "/media/ghc/Ghc_data3/Chu_full_brain/enhance_test/ORIGINAL/Naive/Naive_VMAT_2/Naive_VMAT_2_L/"
+  DESTINATION: "/media/ghc/Ghc_data3/Chu_full_brain/enhance_test/ENHANCED/Naive/Naive_VMAT_2/Naive_VMAT_2_L/"
+  upsample_params: # upsample size, same with dx if no upsample
+    size: [32, 256, 256]
+  patch_range: # coordinates (Z, X, Y) of ROI before upsampling
+    d0: [96, 1024, 896]
+    #d0: [100, 1200, 800]
+    dx: [32, 256, 256]
+  #(175, 4128, 3096)
+  assemble_params:
+    C: [16, 16, 16] # cropped pixels
+    S: [16, 16, 16] # overlapping pixels
+    dx_shape: [ 32, 256, 256 ] # (dz, dx, dy) inference size # upsample size (60, 128, 384) > (384, 128, 384)
+    weight_shape: [ 224, 224, 224] # shape of the weight = dx_shape - cropping
+    weight_method: "cross"
+    zrange: [ 0, 173 - 13*2, 13 * 2] # (z0, x0, y0), (z0 + dz, x0 + dx, y0 + dy), coordinates after upsampling
+    #xrange: [ 768, 768 + 13*16*2 + 1, 13 * 16]
+    xrange: [ 0, 3624 - 13*16, 13 * 16]
+    yrange: [ 0, 2760 - 13*16, 13 * 16]
+  mc: 1
+VMAT:
+  dataset: "VMAT"
+  #root_path: "/media/ghc/Ghc_data3/Chu_full_brain/enhance_test/ROI/"
+  #image_path: [ "DPM/roiA_DPM.tif", "DPMM/roiA_DPMM.tif" ]
+  #image_list_path: null
+  image_path: null
+  image_list_path: ["/Naive_VMAT_2_L_VMAT_Raw_16bit/", "/Naive_VMAT_2_L_VMAT_Mask_8bit_Binary/" ]
+  prj: "/chu123024/ae/cut/1vmatLb20/"
+  epoch : 1000
+  model_type: "AE"
+  hbranchz: true
+  norm_method: ["11", "11"]  # normalization method for each data in the list
+  trd: [[0, 550], [0, 255]] # this is for standard normalization (min() and max())
+  norm_mean_std: [-0.5177, 0.1452]
+DPM:
+  dataset: "DPM"
+  image_path: null
+  image_list_path: [ "/Naive_VMAT_2_L_DPM_Raw_16bit/", "/Naive_VMAT_2_L_DPM_Mask_8bit_Binary/" ]
+  prj: "/chu123024/ae/cut/1dpmLb20/"
+  epoch: 1000
+  model_type: "AE"
+  hbranchz: true
+  norm_method: [ "11", "11" ]  # normalization method for each data in the list
+  trd: [ [ 0, 450 ], [ 0, 255 ] ] # this is for standard normalization (min() and max())
+  norm_mean_std: [-0.4232, 0.1285]
+
+# python test_only.py --gpu --config dpmfull --save ori recon xy --augmentation decode --fp16 --testpatch --option VMAT
+
+# python test_only.py --gpu --config dpmfull --save ori recon xy --augmentation decode --fp16 --testpatch
+
+# python test_only.py  --prj /ae/cut/1dpmLb20/ --epoch 1000 --model_type AE --gpu --hbranchz --config dpmfull --save ori recon xy  --reslice --augmentation decode --fp16
+#python test_only.py  --prj /ae/cut/1vmatLb20/ --epoch 1000 --model_type AE --gpu --hbranchz --config dpmfull --save ori recon xy  --reslice --augmentation decode --fp16

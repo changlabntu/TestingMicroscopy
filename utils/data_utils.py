@@ -68,17 +68,8 @@ class DataNormalization:
         self.backward_type = backward_type
         assert self.backward_type in ["float32", "uint16", "uint8"]
 
-    def forward_normalization(self, x0, norm_method, exp_trd, exp_ftr, trd):
-        if norm_method == 'exp':
-            x0[x0 <= exp_trd[0]] = exp_trd[0]
-            x0[x0 >= exp_trd[1]] = exp_trd[1]
-            x0 = np.log10(x0 + 1)
-            x0 = np.divide((x0 - x0.mean()), x0.std())
-            x0[x0 <= -exp_ftr] = -exp_ftr
-            x0[x0 >= exp_ftr] = exp_ftr
-            x0 = x0 / exp_ftr
-            x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
-        elif norm_method == '11':
+    def forward_normalization(self, x0, norm_method, trd):
+        if norm_method == '11':
             x0[x0 <= trd[0]] = trd[0]
             x0[x0 >= trd[1]] = trd[1]
             # x0 = x0 / x0.max()
@@ -95,14 +86,12 @@ class DataNormalization:
             x0 = torch.from_numpy(x0).unsqueeze(0).unsqueeze(0).float()
         return x0
 
-    def backward_normalization(self, x0, norm_method, exp_trd, trd):
+    def backward_normalization(self, x0, norm_method, trd):
         x0 = self._reverse_normalization(x0, norm_method)
         if self.backward_type == "float32":
             return x0
         elif self.backward_type == "uint16":
-            if norm_method == 'exp':
-                lower_bound, upper_bound = exp_trd[0], exp_trd[1]
-            elif norm_method in ['11', '00', '01']:
+            if norm_method in ['11', '00', '01']:
                 lower_bound, upper_bound = trd[0], trd[1]
             else:
                 lower_bound, upper_bound = 0, 550
@@ -111,12 +100,11 @@ class DataNormalization:
             return self.to_8bit(x0)
 
     def _reverse_normalization(self, x0, norm_method):
-        if norm_method == 'exp':
-            return np.power(10, x0)
-        elif norm_method == '11':
+        if norm_method == '11':
             x0[x0 <= -1] = -1
             x0[x0 >= 1] = 1
-            x0 = (x0 - x0.min()) / (x0.max() - x0.min() + 1e-7)
+            x0 = (x0 + 1) / 2
+            # x0 = (x0 - x0.min()) / (x0.max() - x0.min() + 1e-7)
             return x0
         elif norm_method == '00':
             return x0
